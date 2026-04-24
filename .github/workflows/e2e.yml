@@ -1,0 +1,110 @@
+name: E2E
+
+on:
+  schedule:
+    # Nightly at 02:00 UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      soak:
+        description: 'Run soak test (4-hour)'
+        type: boolean
+        default: false
+
+jobs:
+  e2e:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Install Playwright browsers
+        working-directory: packages/test-e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Build app (unpacked)
+        run: pnpm build
+        env:
+          # Skip code signing for CI
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Run E2E tests
+        working-directory: packages/test-e2e
+        run: npx playwright test --project=electron
+        env:
+          AURALITH_ELECTRON_BINARY: ${{ github.workspace }}/apps/desktop/release/win-unpacked/Auralith.exe
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.sha }}
+          path: packages/test-e2e/playwright-report
+          retention-days: 7
+
+  soak:
+    runs-on: windows-latest
+    timeout-minutes: 300  # 5 hours (4h test + overhead)
+    if: ${{ github.event.inputs.soak == 'true' || github.event_name == 'schedule' }}
+    needs: e2e
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Install Playwright browsers
+        working-directory: packages/test-e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Build app (unpacked)
+        run: pnpm build
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Run soak test
+        working-directory: packages/test-e2e
+        run: npx playwright test --project=soak
+        env:
+          AURALITH_ELECTRON_BINARY: ${{ github.workspace }}/apps/desktop/release/win-unpacked/Auralith.exe

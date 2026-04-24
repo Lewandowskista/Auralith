@@ -1,0 +1,346 @@
+import { randomUUID } from 'crypto'
+import { BrowserWindow } from 'electron'
+import { z } from 'zod'
+import { registerHandler } from '../router'
+import { createSettingsRepo, type DbBundle } from '@auralith/core-db'
+import {
+  AssistantSendParamsSchema,
+  AssistantAbortParamsSchema,
+  AssistantGetSessionParamsSchema,
+  AssistantListSessionsParamsSchema,
+} from '@auralith/core-domain'
+import type { OllamaClient } from '@auralith/core-ai'
+import { runTurn } from '@auralith/core-ai'
+import { hybridSearch, assembleCitations } from '@auralith/core-retrieval'
+import { listToolsForModel, executeTool } from '@auralith/core-tools'
+import type Database from 'better-sqlite3'
+import type { ExecutorDeps } from '@auralith/core-tools'
+
+type AssistantDeps = {
+  bundle: DbBundle
+  sqlite: Database.Database
+  chatClient: OllamaClient
+  chatModel: string
+  embedClient: OllamaClient
+  embedModel: string
+  executorDeps: ExecutorDeps
+}
+
+type CachedTurn = {
+  role: string
+  content: string
+  toolId?: string
+  toolResultJson?: string
+}
+
+type StoredThreadRow = {
+  id: string
+  startedAt: number
+  lastMessageAt: number
+  title?: string
+  messageCount: number
+}
+
+let _deps: AssistantDeps | null = null
+const abortFlags = new Map<string, boolean>()
+const sessionHistories = new Map<string, CachedTurn[]>()
+
+export function initAssistantDeps(deps: AssistantDeps): void {
+  _deps = deps
+}
+
+function getDeps(): AssistantDeps {
+  if (!_deps) throw new Error('Assistant deps not initialized')
+  return _deps
+}
+
+function loadRecentTurnHistory(
+  sqlite: Database.Database,
+  sessionId: string,
+  limit = 12,
+): CachedTurn[] {
+  type TurnRow = {
+    role: string
+    content: string
+    toolId: string | null
+    toolResultJson: string | null
+  }
+
+  const rows = sqlite
+    .prepare(
+      `
+    SELECT role, content, tool_id AS toolId, tool_result_json AS toolResultJson
+    FROM conversation_turns
+    WHERE session_id = ?
+    ORDER BY created_at DESC
+    LIMIT ?
+  `,
+    )
+    .all(sessionId, limit) as TurnRow[]
+
+  return rows.reverse().map((row) => ({
+    role: row.role,
+    content: row.content,
+    ...(row.toolId ? { toolId: row.toolId } : {}),
+    ...(row.toolResultJson ? { toolResultJson: row.toolResultJson } : {}),
+  }))
+}
+
+function loadThreadMessages(
+  sqlite: Database.Database,
+  sessionId: string,
+): Array<{
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  ts: number
+}> {
+  type MessageRow = {
+    id: string
+    role: 'user' | 'assistant'
+    content: string
+    createdAt: number
+  }
+
+  const rows = sqlite
+    .prepare(
+      `
+    SELECT id, role, content, created_at AS createdAt
+    FROM conversation_turns
+    WHERE session_id = ? AND role IN ('user', 'assistant')
+    ORDER BY created_at ASC
+  `,
+    )
+    .all(sessionId) as MessageRow[]
+
+  return rows.map((row) => ({
+    id: row.id,
+    role: row.role,
+    content: row.content,
+    ts: row.createdAt,
+  }))
+}
+
+function listStoredThreads(
+  sqlite: Database.Database,
+  limit: number,
+  offset: number,
+): StoredThreadRow[] {
+  type ThreadRow = {
+    id: string
+    startedAt: number
+    lastMessageAt: number
+    title: string | null
+    messageCount: number
+  }
+
+  const rows = sqlite
+    .prepare(
+      `
+    SELECT
+      base.session_id AS id,
+      MIN(base.created_at) AS startedAt,
+      MAX(base.created_at) AS lastMessageAt,
+      (
+        SELECT content
+        FROM conversation_turns first_user
+        WHERE first_user.session_id = base.session_id AND first_user.role = 'user'
+        ORDER BY first_user.created_at ASC
+        LIMIT 1
+      ) AS title,
+      SUM(CASE WHEN base.role IN ('user', 'assistant') THEN 1 ELSE 0 END) AS messageCount
+    FROM conversation_turns base
+    GROUP BY base.session_id
+    ORDER BY MAX(base.created_at) DESC
+    LIMIT ? OFFSET ?
+  `,
+    )
+    .all(limit, offset) as ThreadRow[]
+
+  return rows.map((row) => ({
+    id: row.id,
+    startedAt: row.startedAt,
+    lastMessageAt: row.lastMessageAt,
+    ...(row.title ? { title: row.title.slice(0, 80) } : {}),
+    messageCount: row.messageCount,
+  }))
+}
+
+function pushCachedTurn(sessionId: string, turn: CachedTurn): void {
+  const history = sessionHistories.get(sessionId) ?? []
+  history.push(turn)
+  if (history.length > 12) history.splice(0, history.length - 12)
+  sessionHistories.set(sessionId, history)
+}
+
+export function registerAssistantHandlers(): void {
+  registerHandler('assistant.send', async (params) => {
+    const {
+      message,
+      messageId: clientMessageId,
+      sessionId: clientSessionId,
+      spaceId,
+    } = AssistantSendParamsSchema.parse(params)
+    const { bundle, sqlite, chatClient, chatModel, embedClient, embedModel, executorDeps } =
+      getDeps()
+    const settings = createSettingsRepo(bundle.db)
+    const personaOverride = settings.get('assistant.personaOverride', z.string())
+    const messageId = clientMessageId ?? randomUUID()
+    const sessionId = clientSessionId ?? messageId
+    const win = BrowserWindow.getAllWindows()[0]
+
+    abortFlags.set(messageId, false)
+
+    let ragContext = ''
+    let citations: ReturnType<typeof assembleCitations>['citations'] = []
+
+    try {
+      const hits = await hybridSearch(
+        { query: message, ...(spaceId !== undefined ? { spaceId } : {}), topK: 6, mode: 'hybrid' },
+        bundle.db,
+        sqlite,
+        bundle.vec,
+        embedClient,
+        embedModel,
+      )
+      const assembled = assembleCitations(hits)
+      citations = assembled.citations
+      if (assembled.chunks.length > 0) {
+        ragContext = assembled.chunks
+          .map((chunk) => `[${chunk.n}] (${chunk.path})\n${chunk.text}`)
+          .join('\n\n---\n\n')
+      }
+    } catch {
+      // No retrieval context â€” continue without it.
+    }
+
+    const cachedHistory =
+      sessionHistories.get(sessionId) ?? loadRecentTurnHistory(sqlite, sessionId)
+    sessionHistories.set(sessionId, cachedHistory)
+
+    const history = cachedHistory.map((turn) => ({
+      role: turn.role as 'user' | 'assistant' | 'tool_result',
+      content: turn.content,
+      ...(turn.toolId !== undefined ? { toolId: turn.toolId } : {}),
+      ...(turn.toolResultJson !== undefined ? { toolResultJson: turn.toolResultJson } : {}),
+    }))
+
+    let turnError = false
+    try {
+      const result = await runTurn({
+        userText: message,
+        sessionId,
+        history,
+        tools: listToolsForModel(),
+        ragContext,
+        ...(personaOverride !== undefined ? { personaOverride } : {}),
+        deps: {
+          chatClient,
+          chatModel,
+          onToken: (token) => {
+            if (!abortFlags.get(messageId)) {
+              win?.webContents.send('assistant:token', { messageId, token })
+            }
+          },
+          executeTool: async (toolId, toolParams) => {
+            if (abortFlags.get(messageId)) {
+              return { outcome: 'cancelled' as const }
+            }
+            win?.webContents.send('assistant:toolCall', { messageId, toolId, params: toolParams })
+            const execResult = await executeTool(
+              toolId,
+              toolParams,
+              { traceId: messageId, actor: 'user' },
+              executorDeps,
+            )
+            win?.webContents.send('assistant:toolResult', {
+              messageId,
+              toolId,
+              outcome: execResult.outcome,
+              result: execResult.outcome === 'success' ? execResult.result : undefined,
+            })
+            return execResult
+          },
+          saveTurn: (turn) => {
+            pushCachedTurn(sessionId, {
+              role: turn.role,
+              content: turn.content,
+              ...(turn.toolId !== undefined ? { toolId: turn.toolId } : {}),
+              ...(turn.toolResultJson !== undefined ? { toolResultJson: turn.toolResultJson } : {}),
+            })
+
+            try {
+              sqlite
+                .prepare(
+                  'INSERT INTO conversation_turns(id,session_id,role,content,tool_id,tool_params_json,tool_result_json,created_at) VALUES(?,?,?,?,?,?,?,?)',
+                )
+                .run(
+                  randomUUID(),
+                  sessionId,
+                  turn.role,
+                  turn.content,
+                  turn.toolId ?? null,
+                  turn.toolParamsJson ?? null,
+                  turn.toolResultJson ?? null,
+                  Date.now(),
+                )
+            } catch {
+              // DB may not be migrated yet on first run.
+            }
+          },
+        },
+      })
+
+      if (!abortFlags.get(messageId)) {
+        win?.webContents.send('assistant:done', {
+          messageId,
+          citations,
+          toolsInvoked: result.toolsInvoked,
+        })
+      }
+    } catch (err) {
+      turnError = true
+      win?.webContents.send('assistant:error', {
+        messageId,
+        error: err instanceof Error ? err.message : 'Turn failed',
+      })
+    } finally {
+      abortFlags.delete(messageId)
+    }
+
+    void turnError
+
+    return { messageId, sessionId }
+  })
+
+  registerHandler('assistant.abort', async (params) => {
+    const { messageId } = AssistantAbortParamsSchema.parse(params)
+    const had = abortFlags.has(messageId)
+    if (had) abortFlags.set(messageId, true)
+    return { aborted: had }
+  })
+
+  registerHandler('assistant.getSession', async (params) => {
+    const { sessionId } = AssistantGetSessionParamsSchema.parse(params)
+    const { sqlite } = getDeps()
+    return {
+      sessionId,
+      messages: loadThreadMessages(sqlite, sessionId),
+    }
+  })
+
+  registerHandler('assistant.listSessions', async (params) => {
+    const { limit, offset } = AssistantListSessionsParamsSchema.parse(params)
+    const { sqlite } = getDeps()
+    const sessions = listStoredThreads(sqlite, limit, offset).map((thread) => ({
+      id: thread.id,
+      startedAt: thread.startedAt,
+      endedAt: thread.lastMessageAt,
+      lastMessageAt: thread.lastMessageAt,
+      title: thread.title,
+      summary: thread.title,
+      messageCount: thread.messageCount,
+    }))
+    return { sessions }
+  })
+}

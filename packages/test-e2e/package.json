@@ -1,0 +1,17 @@
+{
+  "name": "@auralith/test-e2e",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "test": "playwright test --project=electron",
+    "test:headed": "playwright test --project=electron --headed",
+    "test:soak": "playwright test --project=soak",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.9.0",
+    "@playwright/test": "^1.48.0",
+    "axe-core": "^4.11.0",
+    "typescript": "^5.7.0"
+  }
+}

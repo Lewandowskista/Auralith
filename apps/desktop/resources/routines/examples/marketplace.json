@@ -1,0 +1,256 @@
+[
+  {
+    "id": "example:morning-briefing",
+    "name": "Morning Briefing",
+    "description": "Read today's news headlines aloud at 8 AM on weekdays.",
+    "category": "productivity",
+    "trigger": { "type": "schedule", "cronHour": 8, "cronMinute": 0 },
+    "conditions": [{ "type": "weekday.in", "days": [1, 2, 3, 4, 5] }],
+    "actions": [
+      {
+        "toolId": "assistant.speak",
+        "params": { "text": "Good morning! Here is your daily briefing." },
+        "label": "Greet"
+      }
+    ]
+  },
+  {
+    "id": "example:daily-note-capture",
+    "name": "Daily Note Capture",
+    "description": "Create a daily journal note every morning at 9 AM.",
+    "category": "productivity",
+    "trigger": { "type": "schedule", "cronHour": 9, "cronMinute": 0 },
+    "conditions": [],
+    "actions": [
+      {
+        "toolId": "notes.create",
+        "params": { "title": "Daily — {{trigger.date}}", "content": "## Today\n\n" },
+        "label": "Create note"
+      }
+    ]
+  },
+  {
+    "id": "example:idle-lock-clipboard",
+    "name": "Clear Clipboard on Idle",
+    "description": "Clear clipboard history after 15 minutes of inactivity.",
+    "category": "privacy",
+    "trigger": { "type": "on.idle", "idleMinutes": 15 },
+    "conditions": [],
+    "actions": [{ "toolId": "system.clearClipboard", "params": {}, "label": "Clear clipboard" }]
+  },
+  {
+    "id": "example:screenshot-on-hotkey",
+    "name": "Auto-Screenshot on Startup",
+    "description": "Take a desktop screenshot on app startup for daily visual log.",
+    "category": "activity",
+    "trigger": { "type": "app.startup" },
+    "conditions": [],
+    "actions": [
+      { "toolId": "screen.capture", "params": { "saveToDisk": true }, "label": "Capture screen" }
+    ]
+  },
+  {
+    "id": "example:weekly-brain-reindex",
+    "name": "Weekly Brain Reindex",
+    "description": "Reindex all knowledge spaces every Monday at 2 AM.",
+    "category": "knowledge",
+    "trigger": { "type": "schedule", "cronHour": 2, "cronMinute": 0 },
+    "conditions": [{ "type": "weekday.in", "days": [1] }],
+    "actions": [{ "toolId": "brain.reindex", "params": {}, "label": "Reindex all spaces" }]
+  },
+  {
+    "id": "example:new-file-summarize",
+    "name": "Summarize New Downloads",
+    "description": "When a new file is downloaded, send a summary to the assistant.",
+    "category": "activity",
+    "trigger": { "type": "event", "eventKind": "file.created" },
+    "conditions": [],
+    "actions": [
+      {
+        "toolId": "brain.search",
+        "params": { "query": "{{trigger.eventPath}}" },
+        "label": "Search brain for context"
+      }
+    ]
+  },
+  {
+    "id": "example:focus-block-start",
+    "name": "Focus Block Reminder",
+    "description": "Open a note and silence suggestions when focus time starts.",
+    "category": "productivity",
+    "trigger": { "type": "schedule", "cronHour": 10, "cronMinute": 0 },
+    "conditions": [{ "type": "weekday.in", "days": [1, 2, 3, 4, 5] }],
+    "actions": [
+      { "toolId": "notes.open", "params": { "title": "Focus Block" }, "label": "Open focus note" }
+    ]
+  },
+  {
+    "id": "example:end-of-day-review",
+    "name": "End-of-Day Activity Review",
+    "description": "Generate a brief activity summary at 6 PM on weekdays.",
+    "category": "productivity",
+    "trigger": { "type": "schedule", "cronHour": 18, "cronMinute": 0 },
+    "conditions": [{ "type": "weekday.in", "days": [1, 2, 3, 4, 5] }],
+    "actions": [
+      {
+        "toolId": "activity.querySummary",
+        "params": { "rangeHours": 8 },
+        "label": "Query today's activity"
+      }
+    ]
+  },
+  {
+    "id": "example:startup-ollama-check",
+    "name": "Startup Ollama Health Check",
+    "description": "Ping the Ollama service on startup and notify if offline.",
+    "category": "system",
+    "trigger": { "type": "app.startup" },
+    "conditions": [],
+    "actions": [{ "toolId": "system.ollamaPing", "params": {}, "label": "Ping Ollama" }]
+  },
+  {
+    "id": "example:weekend-leisure-suggestions",
+    "name": "Weekend Leisure Nudge",
+    "description": "Trigger leisure suggestions every Saturday morning.",
+    "category": "leisure",
+    "trigger": { "type": "schedule", "cronHour": 10, "cronMinute": 0 },
+    "conditions": [{ "type": "weekday.in", "days": [6] }],
+    "actions": [
+      {
+        "toolId": "suggest.generate",
+        "params": { "kind": "hobby_idea" },
+        "label": "Generate leisure suggestion"
+      }
+    ]
+  },
+  {
+    "id": "example:clipboard-note",
+    "name": "Save Clipboard to Brain",
+    "description": "Save clipboard content as a brain note on a webhook trigger.",
+    "category": "knowledge",
+    "trigger": { "type": "webhook", "path": "/clipboard-save" },
+    "conditions": [],
+    "actions": [
+      {
+        "toolId": "brain.addNote",
+        "params": { "text": "{{trigger.text}}", "title": "Clipped — {{trigger.ts}}" },
+        "label": "Save to brain"
+      }
+    ]
+  },
+  {
+    "id": "example:auto-shell-cleanup",
+    "name": "Auto Temp Folder Cleanup",
+    "description": "Clean the system temp folder every Sunday night at midnight.",
+    "category": "system",
+    "trigger": { "type": "schedule", "cronHour": 0, "cronMinute": 0 },
+    "conditions": [{ "type": "weekday.in", "days": [0] }],
+    "actions": [
+      {
+        "toolId": "shell.run",
+        "params": {
+          "command": "Remove-Item -Path $env:TEMP\\* -Recurse -Force -ErrorAction SilentlyContinue"
+        },
+        "label": "Clean temp"
+      }
+    ]
+  },
+  {
+    "id": "example:news-digest-noon",
+    "name": "Midday News Digest",
+    "description": "Refresh news and show the latest headlines at noon.",
+    "category": "leisure",
+    "trigger": { "type": "schedule", "cronHour": 12, "cronMinute": 0 },
+    "conditions": [],
+    "actions": [{ "toolId": "news.refresh", "params": {}, "label": "Refresh news" }]
+  },
+  {
+    "id": "example:new-note-webhook",
+    "name": "Create Note via Webhook",
+    "description": "Create a brain note when a webhook POST arrives at /new-note.",
+    "category": "knowledge",
+    "trigger": { "type": "webhook", "path": "/new-note" },
+    "conditions": [],
+    "actions": [
+      {
+        "toolId": "notes.create",
+        "params": { "title": "{{trigger.title}}", "content": "{{trigger.content}}" },
+        "label": "Create note"
+      }
+    ]
+  },
+  {
+    "id": "example:focus-app-note",
+    "name": "Log App Switch to Journal",
+    "description": "Append an entry to today's journal whenever a major app focus changes.",
+    "category": "activity",
+    "trigger": { "type": "event", "eventKind": "app.focus" },
+    "conditions": [],
+    "actions": [
+      {
+        "toolId": "notes.append",
+        "params": {
+          "title": "Daily — {{trigger.date}}",
+          "text": "Switched to {{trigger.eventPath}} at {{trigger.ts}}"
+        },
+        "label": "Log switch"
+      }
+    ]
+  },
+  {
+    "id": "example:idle-brain-sync",
+    "name": "Brain Sync on Idle",
+    "description": "Trigger a brain search index refresh when idle for 30 minutes.",
+    "category": "knowledge",
+    "trigger": { "type": "on.idle", "idleMinutes": 30 },
+    "conditions": [],
+    "actions": [{ "toolId": "brain.reindex", "params": {}, "label": "Reindex" }]
+  },
+  {
+    "id": "example:weekly-web-check",
+    "name": "Weekly Site Monitor",
+    "description": "Fetch a saved URL every Monday and summarize changes.",
+    "category": "productivity",
+    "trigger": { "type": "schedule", "cronHour": 9, "cronMinute": 0 },
+    "conditions": [{ "type": "weekday.in", "days": [1] }],
+    "actions": [
+      { "toolId": "web.fetch", "params": { "url": "https://example.com" }, "label": "Fetch site" }
+    ]
+  },
+  {
+    "id": "example:startup-weather",
+    "name": "Morning Weather Briefing",
+    "description": "Fetch and display weather forecast on startup before 10 AM.",
+    "category": "productivity",
+    "trigger": { "type": "app.startup" },
+    "conditions": [{ "type": "time.between", "startHour": 5, "endHour": 10 }],
+    "actions": [{ "toolId": "weather.fetch", "params": {}, "label": "Fetch weather" }]
+  },
+  {
+    "id": "example:screenshot-digest",
+    "name": "Hourly Screenshot Digest",
+    "description": "Capture screen and OCR text every hour for activity log.",
+    "category": "activity",
+    "trigger": { "type": "schedule", "cronHour": -1, "cronMinute": 0 },
+    "conditions": [],
+    "actions": [{ "toolId": "screen.capture", "params": { "ocr": true }, "label": "Capture + OCR" }]
+  },
+  {
+    "id": "example:suggestion-accepted-note",
+    "name": "Log Accepted Suggestions",
+    "description": "When any suggestion is accepted, log it as a note for review.",
+    "category": "productivity",
+    "trigger": { "type": "suggestion.accepted", "suggestionKind": "*" },
+    "conditions": [],
+    "actions": [
+      {
+        "toolId": "notes.append",
+        "params": {
+          "title": "Accepted Suggestions",
+          "text": "Accepted: {{trigger.suggestionKind}} at {{trigger.ts}}"
+        },
+        "label": "Log acceptance"
+      }
+    ]
+  }
+]

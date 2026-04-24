@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:api.anthropic.com)",
+      "Bash(python -c ' *)",
+      "Bash(pnpm --filter @auralith/desktop tsc --noEmit)",
+      "Bash(node -e \"const {app} = require\\('electron'\\); console.log\\(process.platform\\)\")",
+      "Bash(curl -s http://localhost:11434/api/tags)",
+      "Bash(xargs ls *)",
+      "Bash(grep -E \"\\\\.ts$\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({**d.get\\('dependencies',{}\\), **d.get\\('devDependencies',{}\\)}, indent=2\\)\\)\")",
+      "Bash(gh api *)",
+      "Bash(\"c:/Users/Stefan/ProjectTank/resources/whisper/whisper.exe\" --help)",
+      "Bash(\"c:/Users/Stefan/ProjectTank/resources/whisper/whisper.exe\" -m \"c:/Users/Stefan/ProjectTank/resources/whisper/ggml-base.en-q5_1.bin\" --help)",
+      "Bash(node -e ' *)",
+      "Bash(timeout 30 \"c:/Users/Stefan/ProjectTank/resources/whisper/whisper.exe\" -m \"c:/Users/Stefan/ProjectTank/resources/whisper/ggml-base.en-q5_1.bin\" -f test.wav -l en -nt --no-prints)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(git -C \"c:\\\\Users\\\\Stefan\\\\ProjectTank\" status)",
+      "Bash(git -C \"c:\\\\Users\\\\Stefan\\\\ProjectTank\" log --oneline -5)",
+      "Bash(git -C \"c:\\\\Users\\\\Stefan\\\\ProjectTank\" remote -v)",
+      "Bash(git -C \"c:\\\\Users\\\\Stefan\\\\ProjectTank\" remote add origin https://github.com/Lewandowskista/Auralith.git)",
+      "Bash(git -C \"c:\\\\Users\\\\Stefan\\\\ProjectTank\" add .claude .github .gitignore .husky .npmrc .pnpm-build-approvals.json .pnpmfile.cjs .prettierignore .prettierrc ARCHITECTURE.md CLAUDE.md CONTRIBUTING.md PROJECT_BRIEF.md README.md apps docs eslint.config.mjs package.json packages pnpm-lock.yaml pnpm-workspace.yaml resources tsconfig.base.json vitest.config.ts)"
+    ]
+  }
+}

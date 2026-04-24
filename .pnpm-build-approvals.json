@@ -1,0 +1,4 @@
+{
+  "electron": true,
+  "esbuild": true
+}

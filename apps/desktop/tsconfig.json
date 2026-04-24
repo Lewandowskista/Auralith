@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@renderer/*": ["./src/renderer/*"]
+    }
+  },
+  "include": ["src/renderer/**/*", "src/preload/**/*", "electron.vite.config.ts"],
+  "exclude": ["node_modules", "dist", "src/main/**/*", "src/workers/**/*"]
+}

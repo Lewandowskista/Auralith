@@ -1,0 +1,22 @@
+{
+  "name": "@auralith/core-db",
+  "version": "0.0.1",
+  "private": true,
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "drizzle-kit": "^0.31.10",
+    "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "@auralith/core-events": "workspace:*",
+    "better-sqlite3": "^12.9.0",
+    "drizzle-orm": "^0.45.2",
+    "sqlite-vec": "^0.1.9"
+  }
+}

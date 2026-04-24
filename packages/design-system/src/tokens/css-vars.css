@@ -1,0 +1,134 @@
+/* Auralith design token CSS custom properties
+   Import once at the app root (global.css).
+   Dark-mode-first — light mode overrides in .light class (Phase 10).
+*/
+:root {
+  /* Backgrounds */
+  --color-bg-0: #07070b;
+  --color-bg-1: #0e0e14;
+  --color-bg-2: #14141c;
+
+  /* Glass */
+  --color-glass-bg: rgba(20, 20, 28, 0.55);
+  --color-glass-blur: 24px;
+  --color-glass-border: rgba(255, 255, 255, 0.08);
+
+  /* Accent */
+  --color-accent-low: #8b5cf6;
+  --color-accent-mid: #a78bfa;
+  --color-accent-high: #c084fc;
+  --color-accent-gradient: linear-gradient(135deg, #8b5cf6 0%, #c084fc 50%, #60a5fa 100%);
+
+  /* Text */
+  --color-text-primary: #f4f4f8;
+  --color-text-secondary: #a6a6b3;
+  --color-text-tertiary: #6f6f80;
+  --color-text-inverse: #07070b;
+
+  /* Borders */
+  --color-border-hairline: rgba(255, 255, 255, 0.06);
+  --color-border-subtle: rgba(255, 255, 255, 0.09);
+  --color-border-strong: rgba(255, 255, 255, 0.12);
+  --color-border-accent: rgba(139, 92, 246, 0.4);
+
+  /* States */
+  --color-state-success: #34d399;
+  --color-state-success-bg: rgba(52, 211, 153, 0.12);
+  --color-state-warning: #fbbf24;
+  --color-state-warning-bg: rgba(251, 191, 36, 0.12);
+  --color-state-danger: #f87171;
+  --color-state-danger-bg: rgba(248, 113, 113, 0.12);
+  --color-state-info: #60a5fa;
+  --color-state-info-bg: rgba(96, 165, 250, 0.12);
+
+  /* Typography */
+  --font-sans: 'Geist', 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Geist Mono', 'JetBrains Mono', monospace;
+  --font-display: 'Fraunces', 'Georgia', serif;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-base: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  /* Blur */
+  --blur-soft: 12px;
+  --blur-medium: 24px;
+  --blur-strong: 36px;
+
+  /* Motion */
+  --duration-instant: 80ms;
+  --duration-fast: 120ms;
+  --duration-standard: 180ms;
+  --duration-emphasized: 260ms;
+  --easing-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --easing-decelerate: cubic-bezier(0, 0, 0.2, 1);
+  --easing-accelerate: cubic-bezier(0.4, 0, 1, 1);
+
+  /* Nav rail width */
+  --nav-rail-width: 56px;
+
+  /* Right panel width */
+  --panel-right-width: 320px;
+}
+
+/* Reduced motion — zero all durations */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-instant: 0ms;
+    --duration-fast: 0ms;
+    --duration-standard: 0ms;
+    --duration-emphasized: 0ms;
+  }
+}
+
+/* Light mode — activated by adding .light class to <html> */
+.light {
+  /* Backgrounds */
+  --color-bg-0: #f4f4f8;
+  --color-bg-1: #eaeaf0;
+  --color-bg-2: #e0e0ea;
+
+  /* Glass — lighter tinted surface for elevated panels */
+  --color-glass-bg: rgba(240, 240, 248, 0.72);
+  --color-glass-blur: 24px;
+  --color-glass-border: rgba(0, 0, 0, 0.07);
+
+  /* Accent — unchanged; violet reads well on both backgrounds */
+  --color-accent-low: #7c3aed;
+  --color-accent-mid: #8b5cf6;
+  --color-accent-high: #a78bfa;
+  --color-accent-gradient: linear-gradient(135deg, #7c3aed 0%, #a78bfa 50%, #3b82f6 100%);
+
+  /* Text */
+  --color-text-primary: #0e0e14;
+  --color-text-secondary: #4a4a5c;
+  --color-text-tertiary: #8a8a9a;
+  --color-text-inverse: #f4f4f8;
+
+  /* Borders */
+  --color-border-hairline: rgba(0, 0, 0, 0.06);
+  --color-border-subtle: rgba(0, 0, 0, 0.09);
+  --color-border-strong: rgba(0, 0, 0, 0.14);
+  --color-border-accent: rgba(124, 58, 237, 0.35);
+
+  /* States — slightly shifted for light bg readability */
+  --color-state-success: #059669;
+  --color-state-success-bg: rgba(5, 150, 105, 0.10);
+  --color-state-warning: #d97706;
+  --color-state-warning-bg: rgba(217, 119, 6, 0.10);
+  --color-state-danger: #dc2626;
+  --color-state-danger-bg: rgba(220, 38, 38, 0.10);
+  --color-state-info: #2563eb;
+  --color-state-info-bg: rgba(37, 99, 235, 0.10);
+}
