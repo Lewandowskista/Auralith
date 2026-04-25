@@ -19,8 +19,11 @@ import {
   Monitor,
   ShieldCheck,
   ShieldOff,
+  CheckCircle2,
+  AlertCircle,
 } from 'lucide-react'
 import { EmptyState } from '../../components/EmptyState'
+import { ScreenShell } from '../../components/ScreenShell'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -188,59 +191,59 @@ export function ActivityScreen(): ReactElement {
   const [view, setView] = useState<ActiveView>('timeline')
 
   return (
-    <div data-testid="activity-screen" className="flex h-full flex-col overflow-hidden">
-      {/* View switcher header */}
-      <div
-        className="flex shrink-0 items-center gap-1 px-4 py-2"
-        style={{
-          borderBottom: '1px solid var(--color-border-hairline)',
-          background: 'rgba(14,14,20,0.60)',
-          backdropFilter: 'blur(12px)',
-          WebkitBackdropFilter: 'blur(12px)',
-        }}
-      >
-        {[
-          {
-            id: 'timeline' as const,
-            label: 'Timeline',
-            icon: <Activity className="h-3.5 w-3.5" />,
-          },
-          {
-            id: 'clipboard' as const,
-            label: 'Clipboard',
-            icon: <Clipboard className="h-3.5 w-3.5" />,
-          },
-          {
-            id: 'appusage' as const,
-            label: 'App Usage',
-            icon: <Monitor className="h-3.5 w-3.5" />,
-          },
-        ].map(({ id, label, icon }) => {
-          const active = view === id
-          return (
-            <button
-              key={id}
-              onClick={() => setView(id)}
-              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-violet-500"
-              style={{
-                background: active ? 'rgba(139,92,246,0.15)' : 'transparent',
-                color: active ? 'var(--color-accent-mid)' : 'var(--color-text-secondary)',
-                border: `1px solid ${active ? 'var(--color-border-accent)' : 'transparent'}`,
-              }}
-            >
-              {icon}
-              {label}
-            </button>
-          )
-        })}
-      </div>
+    <ScreenShell title="Activity" variant="split">
+      <div className="flex flex-1 flex-col overflow-hidden">
+        {/* View switcher tab bar */}
+        <div
+          className="flex shrink-0 items-center gap-1 px-4 py-2"
+          style={{
+            borderBottom: '1px solid var(--color-border-hairline)',
+            background: 'rgba(14,14,20,0.40)',
+          }}
+        >
+          {[
+            {
+              id: 'timeline' as const,
+              label: 'Timeline',
+              icon: <Activity className="h-3.5 w-3.5" />,
+            },
+            {
+              id: 'clipboard' as const,
+              label: 'Clipboard',
+              icon: <Clipboard className="h-3.5 w-3.5" />,
+            },
+            {
+              id: 'appusage' as const,
+              label: 'App Usage',
+              icon: <Monitor className="h-3.5 w-3.5" />,
+            },
+          ].map(({ id, label, icon }) => {
+            const active = view === id
+            return (
+              <button
+                key={id}
+                onClick={() => setView(id)}
+                className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-violet-500"
+                style={{
+                  background: active ? 'rgba(139,92,246,0.15)' : 'transparent',
+                  color: active ? 'var(--color-accent-mid)' : 'var(--color-text-secondary)',
+                  border: `1px solid ${active ? 'var(--color-border-accent)' : 'transparent'}`,
+                }}
+              >
+                {icon}
+                {label}
+              </button>
+            )
+          })}
+        </div>
 
-      <div className="flex-1 overflow-hidden">
-        {view === 'timeline' && <TimelineView />}
-        {view === 'clipboard' && <ClipboardView />}
-        {view === 'appusage' && <AppUsageView />}
+        <div className="flex-1 overflow-hidden">
+          {view === 'timeline' && <TimelineView />}
+          {view === 'clipboard' && <ClipboardView />}
+          {view === 'appusage' && <AppUsageView />}
+        </div>
       </div>
-    </div>
+    </ScreenShell>
   )
 }
 
@@ -255,6 +258,7 @@ function TimelineView(): ReactElement {
   const [selectedEvent, setSelectedEvent] = useState<EventRow | null>(null)
   const [collapsedSessions, setCollapsedSessions] = useState<Set<string>>(new Set())
   const [page, setPage] = useState(0)
+  const [watchedFolders, setWatchedFolders] = useState<string[]>([])
   const PAGE_SIZE = 100
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -292,6 +296,11 @@ function TimelineView(): ReactElement {
     }, 5000)
     return () => clearInterval(id)
   }, [load])
+  useEffect(() => {
+    void window.auralith.invoke('activity.getWatchedFolders', {}).then((res) => {
+      if (res.ok) setWatchedFolders((res.data as { folders: string[] }).folders)
+    })
+  }, [])
 
   function toggleSessionCollapse(id: string) {
     setCollapsedSessions((prev) => {
@@ -313,6 +322,41 @@ function TimelineView(): ReactElement {
   return (
     <div className="flex h-full overflow-hidden">
       <div className="flex flex-1 flex-col overflow-hidden">
+        {/* Watching status bar */}
+        <div
+          className="flex shrink-0 items-center gap-2 px-4 py-2"
+          style={{
+            borderBottom: '1px solid var(--color-border-hairline)',
+            background: 'rgba(10,10,16,0.35)',
+          }}
+        >
+          {watchedFolders.length > 0 ? (
+            <>
+              <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-400" />
+              <span className="text-[11px] text-[var(--color-text-secondary)]">
+                Watching {watchedFolders.length} folder{watchedFolders.length !== 1 ? 's' : ''}
+              </span>
+            </>
+          ) : (
+            <>
+              <AlertCircle className="h-3 w-3 shrink-0 text-amber-400" />
+              <span className="text-[11px] text-[var(--color-text-secondary)]">
+                File watching inactive —{' '}
+                <button
+                  onClick={() =>
+                    window.dispatchEvent(
+                      new CustomEvent('auralith:navigate', { detail: { section: 'settings' } }),
+                    )
+                  }
+                  className="text-violet-400 underline-offset-2 hover:underline focus-visible:outline-none"
+                >
+                  Configure in Settings
+                </button>
+              </span>
+            </>
+          )}
+        </div>
+
         {/* Filter chips */}
         <div
           className="flex items-center gap-3 px-4 py-2.5 flex-wrap"
@@ -321,10 +365,12 @@ function TimelineView(): ReactElement {
             background: 'rgba(10,10,16,0.5)',
           }}
         >
-          <span className="text-xs text-[#6F6F80]">{total.toLocaleString()} events</span>
+          <span className="text-xs text-[var(--color-text-tertiary)]">
+            {total.toLocaleString()} events
+          </span>
           <div className="flex-1" />
           <div className="flex items-center gap-1.5 flex-wrap">
-            <Filter className="h-3 w-3 mr-0.5 text-[#6F6F80]" />
+            <Filter className="h-3 w-3 mr-0.5 text-[var(--color-text-tertiary)]" />
             {[null, ...ALL_KINDS].map((k) => {
               const isActive = kindFilter === k
               const label = k === null ? 'All' : KIND_LABELS[k as EventKind]
@@ -359,7 +405,7 @@ function TimelineView(): ReactElement {
         <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-2">
           {loading && events.length === 0 ? (
             <div className="flex h-full items-center justify-center">
-              <p className="text-sm text-[#6F6F80]">Loading…</p>
+              <p className="text-sm text-[var(--color-text-tertiary)]">Loading…</p>
             </div>
           ) : events.length === 0 ? (
             <EmptyState
@@ -377,7 +423,7 @@ function TimelineView(): ReactElement {
                       className="sticky top-0 z-10 flex items-center gap-2 py-2 pt-4"
                       style={{ background: 'rgba(7,7,11,0.88)', backdropFilter: 'blur(8px)' }}
                     >
-                      <span className="text-[10px] font-semibold uppercase tracking-widest text-[#6F6F80]">
+                      <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-tertiary)]">
                         {item.label}
                       </span>
                       <div
@@ -396,15 +442,15 @@ function TimelineView(): ReactElement {
                       className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-white/[0.03] transition focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-violet-500"
                     >
                       {collapsed ? (
-                        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[#6F6F80]" />
+                        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-tertiary)]" />
                       ) : (
-                        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#6F6F80]" />
+                        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-tertiary)]" />
                       )}
-                      <Clock className="h-3.5 w-3.5 shrink-0 text-[#6F6F80]" />
-                      <span className="flex-1 text-xs text-[#A6A6B3]">
+                      <Clock className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-tertiary)]" />
+                      <span className="flex-1 text-xs text-[var(--color-text-secondary)]">
                         {sessionLabel(item.session)}
                       </span>
-                      <span className="text-[10px] text-[#6F6F80]">
+                      <span className="text-[10px] text-[var(--color-text-tertiary)]">
                         {formatTime(item.session.startedAt)}
                       </span>
                       <button
@@ -412,7 +458,7 @@ function TimelineView(): ReactElement {
                           e.stopPropagation()
                           handleAskAssistant(item.session)
                         }}
-                        className="ml-1 flex items-center gap-1 rounded-lg border border-white/[0.08] px-2 py-0.5 text-[10px] text-[#6F6F80] hover:bg-white/5 hover:text-violet-400 transition"
+                        className="ml-1 flex items-center gap-1 rounded-lg border border-white/[0.08] px-2 py-0.5 text-[10px] text-[var(--color-text-tertiary)] hover:bg-white/5 hover:text-violet-400 transition"
                         aria-label="Ask assistant about this session"
                       >
                         <MessageSquare className="h-2.5 w-2.5" /> Ask
@@ -449,16 +495,22 @@ function TimelineView(): ReactElement {
                         >
                           {KIND_LABELS[kind]}
                         </span>
-                        <span className="truncate text-xs text-[#F4F4F8]">{basename(ev.path)}</span>
+                        <span className="truncate text-xs text-[var(--color-text-primary)]">
+                          {basename(ev.path)}
+                        </span>
                       </div>
-                      <p className="truncate font-mono text-[10px] text-[#6F6F80]">{ev.path}</p>
+                      <p className="truncate font-mono text-[10px] text-[var(--color-text-tertiary)]">
+                        {ev.path}
+                      </p>
                       {ev.prevPath && (
-                        <p className="truncate font-mono text-[10px] text-[#6F6F80]">
+                        <p className="truncate font-mono text-[10px] text-[var(--color-text-tertiary)]">
                           ← {ev.prevPath}
                         </p>
                       )}
                     </div>
-                    <span className="shrink-0 text-[10px] text-[#6F6F80]">{formatTime(ev.ts)}</span>
+                    <span className="shrink-0 text-[10px] text-[var(--color-text-tertiary)]">
+                      {formatTime(ev.ts)}
+                    </span>
                   </motion.button>
                 )
               })}
@@ -466,18 +518,18 @@ function TimelineView(): ReactElement {
                 <div className="flex items-center justify-center gap-4 py-4">
                   <button
                     onClick={() => setPage((p) => Math.max(0, p - 1))}
-                    disabled={page === 0}
-                    className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-[#A6A6B3] hover:bg-white/5 disabled:opacity-40 transition"
+                    disabled={page === 0 || loading}
+                    className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-[var(--color-text-secondary)] hover:bg-white/5 disabled:opacity-40 transition"
                   >
                     Previous
                   </button>
-                  <span className="text-xs text-[#6F6F80]">
+                  <span className="text-xs text-[var(--color-text-tertiary)]">
                     {page + 1} / {Math.ceil(total / PAGE_SIZE)}
                   </span>
                   <button
                     onClick={() => setPage((p) => p + 1)}
-                    disabled={(page + 1) * PAGE_SIZE >= total}
-                    className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-[#A6A6B3] hover:bg-white/5 disabled:opacity-40 transition"
+                    disabled={(page + 1) * PAGE_SIZE >= total || loading}
+                    className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-[var(--color-text-secondary)] hover:bg-white/5 disabled:opacity-40 transition"
                   >
                     Next
                   </button>
@@ -513,11 +565,13 @@ function TimelineView(): ReactElement {
                     {KIND_LABELS[selectedEvent.kind as EventKind]}
                   </span>
                 </div>
-                <p className="break-all font-mono text-xs text-[#F4F4F8]">{selectedEvent.path}</p>
+                <p className="break-all font-mono text-xs text-[var(--color-text-primary)]">
+                  {selectedEvent.path}
+                </p>
               </div>
               <button
                 onClick={() => setSelectedEvent(null)}
-                className="shrink-0 rounded-lg p-1 text-[#6F6F80] hover:bg-white/5 hover:text-[#A6A6B3] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
+                className="shrink-0 rounded-lg p-1 text-[var(--color-text-tertiary)] hover:bg-white/5 hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
                 aria-label="Close"
               >
                 <X className="h-3.5 w-3.5" />
@@ -536,12 +590,10 @@ function TimelineView(): ReactElement {
               )}
               {selectedEvent.payloadJson !== '{}' && (
                 <div>
-                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[#6F6F80]">
+                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-tertiary)]">
                     Payload
                   </p>
-                  <pre className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-3 text-[10px] leading-relaxed text-[#A6A6B3] overflow-x-auto">
-                    {JSON.stringify(JSON.parse(selectedEvent.payloadJson) as unknown, null, 2)}
-                  </pre>
+                  <PayloadDetailView raw={selectedEvent.payloadJson} />
                 </div>
               )}
             </div>
@@ -587,7 +639,7 @@ function ClipboardView(): ReactElement {
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
-        <p className="text-sm text-[#6F6F80]">Loading…</p>
+        <p className="text-sm text-[var(--color-text-tertiary)]">Loading…</p>
       </div>
     )
   }
@@ -631,7 +683,7 @@ function ClipboardView(): ReactElement {
                 className="sticky top-0 z-10 flex items-center gap-2 py-2 pt-4"
                 style={{ background: 'rgba(7,7,11,0.88)', backdropFilter: 'blur(8px)' }}
               >
-                <span className="text-[10px] font-semibold uppercase tracking-widest text-[#6F6F80]">
+                <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-tertiary)]">
                   {dateLabel}
                 </span>
                 <div
@@ -659,22 +711,24 @@ function ClipboardView(): ReactElement {
                     Redacted — sensitive content detected ({item.charCount ?? '?'} chars)
                   </p>
                 ) : (
-                  <p className="text-xs text-[#E4E4EC] line-clamp-3 break-words">
+                  <p className="text-xs text-[var(--color-text-primary)] line-clamp-3 break-words">
                     {item.textValue}
                   </p>
                 )}
                 <div className="mt-1 flex items-center gap-2">
                   {item.charCount !== undefined && (
-                    <span className="text-[10px] text-[#6F6F80]">
+                    <span className="text-[10px] text-[var(--color-text-tertiary)]">
                       {item.charCount.toLocaleString()} chars
                     </span>
                   )}
-                  <span className="text-[10px] text-[#6F6F80]">{formatTime(item.ts)}</span>
+                  <span className="text-[10px] text-[var(--color-text-tertiary)]">
+                    {formatTime(item.ts)}
+                  </span>
                 </div>
               </div>
               <button
                 onClick={() => void deleteItem(item.id)}
-                className="shrink-0 rounded p-1 text-[#6F6F80] opacity-0 group-hover:opacity-100 hover:bg-white/5 hover:text-red-400 transition focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-red-500"
+                className="shrink-0 rounded p-1 text-[var(--color-text-tertiary)] opacity-0 group-hover:opacity-100 hover:bg-white/5 hover:text-red-400 transition focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-red-500"
                 aria-label="Delete entry"
               >
                 <X className="h-3 w-3" />
@@ -717,7 +771,7 @@ function AppUsageView(): ReactElement {
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
-        <p className="text-sm text-[#6F6F80]">Loading…</p>
+        <p className="text-sm text-[var(--color-text-tertiary)]">Loading…</p>
       </div>
     )
   }
@@ -761,7 +815,7 @@ function AppUsageView(): ReactElement {
                 className="sticky top-0 z-10 flex items-center gap-2 py-2 pt-4"
                 style={{ background: 'rgba(7,7,11,0.88)', backdropFilter: 'blur(8px)' }}
               >
-                <span className="text-[10px] font-semibold uppercase tracking-widest text-[#6F6F80]">
+                <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-tertiary)]">
                   {dateLabel}
                 </span>
                 <div
@@ -787,14 +841,20 @@ function AppUsageView(): ReactElement {
                   >
                     {BUCKET_LABELS[row.bucket]}
                   </span>
-                  <span className="truncate text-xs text-[#A6A6B3]">{row.processName}</span>
+                  <span className="truncate text-xs text-[var(--color-text-secondary)]">
+                    {row.processName}
+                  </span>
                 </div>
                 <div className="flex items-center gap-2 mt-0.5">
-                  <span className="text-[10px] text-[#6F6F80]">{formatTime(row.startedAt)}</span>
+                  <span className="text-[10px] text-[var(--color-text-tertiary)]">
+                    {formatTime(row.startedAt)}
+                  </span>
                   {row.endedAt && (
-                    <span className="text-[10px] text-[#6F6F80]">→ {formatTime(row.endedAt)}</span>
+                    <span className="text-[10px] text-[var(--color-text-tertiary)]">
+                      → {formatTime(row.endedAt)}
+                    </span>
                   )}
-                  <span className="text-[10px] text-[#6F6F80]">
+                  <span className="text-[10px] text-[var(--color-text-tertiary)]">
                     · {formatDuration(row.durationMs)}
                   </span>
                 </div>
@@ -809,13 +869,75 @@ function AppUsageView(): ReactElement {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+function safeParseJson(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+function formatPayloadValue(v: unknown): string {
+  if (v === null || v === undefined) return '—'
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No'
+  if (typeof v === 'number') return v.toLocaleString()
+  if (typeof v === 'string') return v
+  return JSON.stringify(v)
+}
+
+function PayloadDetailView({ raw }: { raw: string }) {
+  const parsed = safeParseJson(raw)
+  if (!parsed) {
+    return (
+      <p className="text-[11px] italic text-[var(--color-text-tertiary)]">(malformed payload)</p>
+    )
+  }
+  const entries = Object.entries(parsed)
+  if (entries.length === 0) return null
+  return (
+    <div className="space-y-2">
+      {entries.map(([key, val]) => {
+        const isComplex = val !== null && typeof val === 'object'
+        return (
+          <div key={key}>
+            <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-tertiary)]">
+              {key
+                .replace(/([A-Z])/g, ' $1')
+                .replace(/_/g, ' ')
+                .trim()}
+            </p>
+            {isComplex ? (
+              <pre className="rounded-lg border border-white/[0.06] bg-white/[0.03] p-2 text-[10px] leading-relaxed text-[var(--color-text-secondary)] overflow-x-auto whitespace-pre-wrap break-all">
+                {JSON.stringify(val, null, 2)}
+              </pre>
+            ) : (
+              <p className="break-all text-xs text-[var(--color-text-secondary)]">
+                {formatPayloadValue(val)}
+              </p>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function DetailRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div>
-      <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-[#6F6F80]">
+      <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-tertiary)]">
         {label}
       </p>
-      <p className={['break-all text-xs text-[#A6A6B3]', mono ? 'font-mono' : ''].join(' ')}>
+      <p
+        className={[
+          'break-all text-xs text-[var(--color-text-secondary)]',
+          mono ? 'font-mono' : '',
+        ].join(' ')}
+      >
         {value}
       </p>
     </div>

@@ -61,6 +61,12 @@ body,
   background: rgba(255, 255, 255, 0.2);
 }
 
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
 /* Reduced motion — honor OS setting */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -70,4 +76,96 @@ body,
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Shimmer animation for image skeleton loading */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* Token streaming fade-in — applied to the live tail span during assistant streaming */
+@keyframes token-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Blinking text cursor shown at the end of streaming assistant messages */
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+/* Thinking indicator dots — three dots that bounce in sequence */
+@keyframes thinking-dot {
+  0%, 80%, 100% { opacity: 0.2; transform: translateY(0); }
+  40%           { opacity: 1;   transform: translateY(-3px); }
+}
+
+/* Article body — scoped styles for full article HTML rendered in reader panel */
+.article-body p { margin: 0.75em 0; }
+.article-body h1,
+.article-body h2 {
+  font-size: 1em;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 1.2em 0 0.4em;
+}
+.article-body h3 {
+  font-size: 0.9em;
+  font-weight: 600;
+  margin: 1em 0 0.3em;
+}
+.article-body h4,
+.article-body h5,
+.article-body h6 {
+  font-size: 0.85em;
+  font-weight: 600;
+  margin: 0.8em 0 0.3em;
+}
+.article-body img {
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 0.75em 0;
+  border: 1px solid var(--color-border-hairline);
+  display: block;
+}
+.article-body a {
+  color: var(--color-accent-mid);
+  text-decoration: none;
+}
+.article-body a:hover { opacity: 0.8; }
+.article-body ul,
+.article-body ol { padding-left: 1.5em; }
+.article-body li { margin: 0.25em 0; }
+.article-body blockquote {
+  border-left: 2px solid var(--color-accent-mid);
+  padding-left: 0.75em;
+  color: var(--color-text-tertiary);
+  font-style: italic;
+  margin: 0.75em 0;
+}
+.article-body figure { margin: 0.75em 0; }
+.article-body figcaption {
+  font-size: 0.8em;
+  color: var(--color-text-tertiary);
+  margin-top: 0.25em;
+}
+.article-body pre {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--color-border-hairline);
+  border-radius: 6px;
+  padding: 0.75em 1em;
+  overflow-x: auto;
+  font-size: 0.85em;
+}
+.article-body code {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+  font-size: 0.85em;
+}
+.article-body pre code {
+  background: transparent;
+  padding: 0;
 }

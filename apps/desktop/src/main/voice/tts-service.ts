@@ -101,7 +101,7 @@ $synth.GetInstalledVoices() | ForEach-Object {
 
   private speakOne(text: string, voiceId?: string, rate?: number): Promise<void> {
     return new Promise((resolve, reject) => {
-      const safeText = text.replace(/'/g, "''").replace(/\\/g, '\\\\').slice(0, 2000)
+      const safeText = text.replace(/'/g, "''").slice(0, 2000)
       const voiceLine = voiceId ? `$synth.SelectVoice('${voiceId}')` : ''
       const rateLine = rate !== undefined ? `$synth.Rate = ${Math.round((rate - 1) * 5)}` : ''
 

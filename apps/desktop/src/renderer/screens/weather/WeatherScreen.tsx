@@ -14,6 +14,7 @@ import {
   CloudRain,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { ScreenShell } from '../../components/ScreenShell'
 
 type CurrentWeather = {
   temp: number
@@ -127,9 +128,10 @@ export function WeatherScreen(): ReactElement {
   const [loading, setLoading] = useState(false)
   const [noLocation, setNoLocation] = useState(false)
   const [settingLocation, setSettingLocation] = useState(false)
-  const [latInput, setLatInput] = useState('')
-  const [lonInput, setLonInput] = useState('')
-  const [labelInput, setLabelInput] = useState('')
+  const [cityInput, setCityInput] = useState('')
+  const [countryInput, setCountryInput] = useState('')
+  const [geocoding, setGeocoding] = useState(false)
+  const [locationError, setLocationError] = useState<string | null>(null)
 
   const loadWeather = useCallback(async () => {
     setLoading(true)
@@ -177,27 +179,51 @@ export function WeatherScreen(): ReactElement {
     void loadWeather()
   }, [loadWeather])
 
+  useEffect(() => {
+    async function loadPersistedCity(): Promise<void> {
+      const [cityRes, countryRes] = await Promise.all([
+        window.auralith.invoke('settings.get', { key: 'weather.city' }),
+        window.auralith.invoke('settings.get', { key: 'weather.country' }),
+      ])
+      if (cityRes.ok) {
+        const city = (cityRes.data as { value: unknown }).value
+        if (typeof city === 'string' && city) setCityInput(city)
+      }
+      if (countryRes.ok) {
+        const country = (countryRes.data as { value: unknown }).value
+        if (typeof country === 'string') setCountryInput(country)
+      }
+    }
+    void loadPersistedCity()
+  }, [])
+
   async function saveLocation(): Promise<void> {
-    const lat = parseFloat(latInput)
-    const lon = parseFloat(lonInput)
-    if (isNaN(lat) || isNaN(lon)) {
-      toast.error('Enter valid lat/lon values')
+    if (!cityInput.trim()) {
+      toast.error('Enter a city name')
       return
     }
-    const res = await window.auralith.invoke('weather.setLocation', {
-      lat,
-      lon,
-      ...(labelInput.trim() ? { label: labelInput.trim() } : {}),
-    })
-    if (res.ok) {
-      toast.success('Location saved')
-      setSettingLocation(false)
-      setLatInput('')
-      setLonInput('')
-      setLabelInput('')
-      void loadWeather()
-    } else {
-      toast.error('Failed to save location')
+    setLocationError(null)
+    setGeocoding(true)
+    try {
+      const res = await window.auralith.invoke('weather.setLocationByCity', {
+        city: cityInput.trim(),
+        ...(countryInput.trim() ? { country: countryInput.trim() } : {}),
+      })
+      if (res.ok) {
+        const { resolvedName } = res.data as { resolvedName: string }
+        toast.success(`Location set to ${resolvedName}`)
+        setSettingLocation(false)
+        void loadWeather()
+      } else {
+        const errCode = (res.error as { code?: string })?.code
+        if (errCode === 'CITY_NOT_FOUND') {
+          setLocationError('City not found. Try a different spelling or add a country code.')
+        } else {
+          toast.error('Failed to save location')
+        }
+      }
+    } finally {
+      setGeocoding(false)
     }
   }
 
@@ -209,8 +235,8 @@ export function WeatherScreen(): ReactElement {
           <div className="text-base font-medium" style={{ color: 'var(--color-text-primary)' }}>
             Set your location
           </div>
-          <div className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
-            Enter coordinates to get local weather from Open-Meteo
+          <div className="text-sm text-center" style={{ color: 'var(--color-text-tertiary)' }}>
+            Enter your city to get local weather from Open-Meteo
           </div>
         </div>
 
@@ -223,16 +249,24 @@ export function WeatherScreen(): ReactElement {
               color: 'var(--color-text-primary)',
               fontFamily: 'var(--font-sans)',
             }}
-            placeholder="Latitude (e.g. 52.52)"
-            value={latInput}
-            onChange={(e) => setLatInput(e.target.value)}
+            placeholder="City (e.g. Berlin)"
+            value={cityInput}
+            onChange={(e) => {
+              setCityInput(e.target.value)
+              setLocationError(null)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void saveLocation()
+            }}
             onFocus={(e) => {
               e.currentTarget.style.borderColor = 'rgba(139,92,246,0.5)'
             }}
             onBlur={(e) => {
               e.currentTarget.style.borderColor = 'var(--color-border-hairline)'
             }}
+            autoFocus
           />
+          {locationError && <p className="text-xs text-red-400 -mt-1">{locationError}</p>}
           <input
             className="px-3 py-2 rounded-lg text-sm outline-none"
             style={{
@@ -241,27 +275,12 @@ export function WeatherScreen(): ReactElement {
               color: 'var(--color-text-primary)',
               fontFamily: 'var(--font-sans)',
             }}
-            placeholder="Longitude (e.g. 13.41)"
-            value={lonInput}
-            onChange={(e) => setLonInput(e.target.value)}
-            onFocus={(e) => {
-              e.currentTarget.style.borderColor = 'rgba(139,92,246,0.5)'
+            placeholder="Country code (e.g. DE) — optional"
+            value={countryInput}
+            onChange={(e) => setCountryInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void saveLocation()
             }}
-            onBlur={(e) => {
-              e.currentTarget.style.borderColor = 'var(--color-border-hairline)'
-            }}
-          />
-          <input
-            className="px-3 py-2 rounded-lg text-sm outline-none"
-            style={{
-              background: 'rgba(255,255,255,0.05)',
-              border: '1px solid var(--color-border-hairline)',
-              color: 'var(--color-text-primary)',
-              fontFamily: 'var(--font-sans)',
-            }}
-            placeholder="Label (optional, e.g. Berlin)"
-            value={labelInput}
-            onChange={(e) => setLabelInput(e.target.value)}
             onFocus={(e) => {
               e.currentTarget.style.borderColor = 'rgba(139,92,246,0.5)'
             }}
@@ -293,21 +312,23 @@ export function WeatherScreen(): ReactElement {
             )}
             <button
               onClick={() => void saveLocation()}
+              disabled={geocoding}
               className="flex-1 px-3 py-2 rounded-lg text-sm font-medium text-white transition-opacity"
               style={{
                 background: 'var(--color-accent-gradient)',
                 border: 'none',
-                cursor: 'default',
+                cursor: geocoding ? 'not-allowed' : 'default',
+                opacity: geocoding ? 0.6 : 1,
                 fontFamily: 'var(--font-sans)',
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.opacity = '0.9'
+                if (!geocoding) e.currentTarget.style.opacity = '0.9'
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.opacity = '1'
+                if (!geocoding) e.currentTarget.style.opacity = '1'
               }}
             >
-              Save Location
+              {geocoding ? 'Searching…' : 'Save Location'}
             </button>
           </div>
         </div>
@@ -316,50 +337,20 @@ export function WeatherScreen(): ReactElement {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      {/* Header */}
-      <div
-        className="flex items-center justify-between px-6 py-4 shrink-0"
-        style={{
-          borderBottom: '1px solid var(--color-border-hairline)',
-          background: 'rgba(14,14,20,0.60)',
-          backdropFilter: 'blur(12px)',
-          WebkitBackdropFilter: 'blur(12px)',
-        }}
-      >
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-            Weather
-          </span>
+    <ScreenShell
+      title="Weather"
+      variant="padded"
+      actions={
+        <>
           {location && (
-            <span
-              className="flex items-center gap-1 text-xs"
-              style={{ color: 'var(--color-text-tertiary)' }}
-            >
+            <span className="flex items-center gap-1 text-xs text-[var(--color-text-tertiary)]">
               <MapPin size={12} />
               {location}
             </span>
           )}
-        </div>
-        <div className="flex items-center gap-2">
           <button
             onClick={() => setSettingLocation(true)}
-            className="flex items-center gap-1.5 text-xs transition-colors"
-            style={{
-              padding: '5px 12px',
-              borderRadius: 8,
-              border: '1px solid var(--color-border-hairline)',
-              background: 'transparent',
-              color: 'var(--color-text-secondary)',
-              cursor: 'default',
-              fontFamily: 'var(--font-sans)',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(255,255,255,0.04)'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent'
-            }}
+            className="flex items-center gap-1.5 rounded-lg border border-[var(--color-border-hairline)] px-3 py-1.5 text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent-low)]"
           >
             <MapPin size={12} />
             Change Location
@@ -367,269 +358,251 @@ export function WeatherScreen(): ReactElement {
           <button
             onClick={() => void loadWeather()}
             disabled={loading}
-            className="flex items-center gap-1.5 text-xs transition-colors disabled:opacity-40"
-            style={{
-              padding: '5px 12px',
-              borderRadius: 8,
-              border: '1px solid var(--color-border-hairline)',
-              background: 'transparent',
-              color: 'var(--color-text-secondary)',
-              cursor: 'default',
-              fontFamily: 'var(--font-sans)',
-            }}
-            onMouseEnter={(e) => {
-              if (!loading) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent'
-            }}
+            className="flex items-center gap-1.5 rounded-lg border border-[var(--color-border-hairline)] px-3 py-1.5 text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-white/[0.04] disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent-low)]"
           >
             <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
             Refresh
           </button>
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto">
-        <div className="max-w-[680px] mx-auto px-8 py-8 space-y-5">
-          {/* Alert banner */}
-          <AnimatePresence>
-            {briefing && briefing.alertLevel !== 'none' && (
-              <motion.div
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                className="flex items-start gap-3 px-4 py-3 rounded-xl border text-sm"
-                style={alertStyle(briefing.alertLevel)}
-              >
-                <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-                <span>{briefing.summary}</span>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Current conditions hero */}
-          {current && (
+        </>
+      }
+    >
+      <div className="max-w-[680px] mx-auto px-8 py-8 space-y-5">
+        {/* Alert banner */}
+        <AnimatePresence>
+          {briefing && briefing.alertLevel !== 'none' && (
             <motion.div
-              initial={{ opacity: 0, y: 12 }}
+              initial={{ opacity: 0, y: -8 }}
               animate={{ opacity: 1, y: 0 }}
-              className="relative overflow-hidden"
+              exit={{ opacity: 0, y: -8 }}
+              className="flex items-start gap-3 px-4 py-3 rounded-xl border text-sm"
+              style={alertStyle(briefing.alertLevel)}
+            >
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              <span>{briefing.summary}</span>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Current conditions hero */}
+        {current && (
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="relative overflow-hidden"
+            style={{
+              padding: '40px 36px 36px',
+              borderRadius: 20,
+              background:
+                'linear-gradient(135deg, rgba(139,92,246,0.18) 0%, rgba(96,165,250,0.12) 50%, rgba(20,20,28,0.85) 100%)',
+              border: '1px solid var(--color-border-subtle)',
+              backdropFilter: 'blur(12px)',
+              WebkitBackdropFilter: 'blur(12px)',
+            }}
+          >
+            {/* Decorative circles */}
+            <div
+              className="pointer-events-none absolute"
               style={{
-                padding: '40px 36px 36px',
-                borderRadius: 20,
-                background:
-                  'linear-gradient(135deg, rgba(139,92,246,0.18) 0%, rgba(96,165,250,0.12) 50%, rgba(20,20,28,0.85) 100%)',
-                border: '1px solid var(--color-border-subtle)',
+                top: -40,
+                right: -40,
+                width: 160,
+                height: 160,
+                borderRadius: '50%',
+                background: 'rgba(139,92,246,0.08)',
+              }}
+            />
+            <div
+              className="pointer-events-none absolute"
+              style={{
+                bottom: -20,
+                right: 60,
+                width: 80,
+                height: 80,
+                borderRadius: '50%',
+                background: 'rgba(96,165,250,0.08)',
+              }}
+            />
+
+            <div className="flex items-start justify-between mb-6 relative">
+              <div>
+                <div className="flex items-start gap-1 mb-1">
+                  <span
+                    className="leading-none font-light"
+                    style={{
+                      fontSize: 80,
+                      color: 'var(--color-text-primary)',
+                      letterSpacing: '-0.04em',
+                      fontFamily: 'var(--font-display)',
+                    }}
+                  >
+                    {Math.round(current.temp)}
+                  </span>
+                  <span
+                    className="font-light mt-3"
+                    style={{ fontSize: 28, color: 'var(--color-text-secondary)' }}
+                  >
+                    °C
+                  </span>
+                </div>
+                <p
+                  className="text-lg capitalize mb-1"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  {current.description}
+                </p>
+                <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
+                  Feels like {Math.round(current.feelsLike)}°C
+                </p>
+              </div>
+              <div className="text-[72px] leading-none opacity-80">
+                {wmoEmoji(current.weatherCode)}
+              </div>
+            </div>
+
+            {/* Stats strip */}
+            <div className="flex gap-5 relative">
+              {[
+                { Icon: Wind, label: 'Wind', value: `${Math.round(current.windSpeed)} km/h` },
+                { Icon: Droplets, label: 'Humidity', value: `${current.humidity}%` },
+                {
+                  Icon: Thermometer,
+                  label: 'Feels like',
+                  value: `${Math.round(current.feelsLike)}°`,
+                },
+              ].map(({ Icon, label, value }) => (
+                <div key={label} className="flex-1">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <Icon size={12} style={{ color: 'var(--color-text-tertiary)' }} />
+                    <span className="text-[10px]" style={{ color: 'var(--color-text-tertiary)' }}>
+                      {label}
+                    </span>
+                  </div>
+                  <p className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>
+                    {value}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {/* Sunrise / Sunset */}
+            {daily[0] && (
+              <div
+                className="flex items-center gap-6 mt-5 pt-4 relative"
+                style={{ borderTop: '1px solid var(--color-border-hairline)' }}
+              >
+                <div
+                  className="flex items-center gap-2 text-sm"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  <Sunrise size={14} style={{ color: 'var(--color-state-warning)' }} />
+                  <span>{formatTime(daily[0].sunrise)}</span>
+                </div>
+                <div
+                  className="flex items-center gap-2 text-sm"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  <Sunset size={14} style={{ color: 'var(--color-accent-mid)' }} />
+                  <span>{formatTime(daily[0].sunset)}</span>
+                </div>
+                {daily[0].precipSum > 0 && (
+                  <div
+                    className="flex items-center gap-2 text-sm"
+                    style={{ color: 'var(--color-text-secondary)' }}
+                  >
+                    <CloudRain size={14} style={{ color: 'var(--color-text-tertiary)' }} />
+                    <span>{daily[0].precipSum.toFixed(1)} mm today</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </motion.div>
+        )}
+
+        {/* Briefing summary (when no alert — alert shows it already) */}
+        {briefing && briefing.alertLevel === 'none' && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="px-4 py-3 rounded-xl text-sm"
+            style={{
+              background: 'rgba(255,255,255,0.04)',
+              border: '1px solid var(--color-border-hairline)',
+              color: 'var(--color-text-secondary)',
+            }}
+          >
+            {briefing.summary}
+          </motion.div>
+        )}
+
+        {/* Hourly strip */}
+        {hourly.length > 0 && (
+          <div>
+            <div
+              className="text-xs font-medium uppercase tracking-wider mb-3"
+              style={{ color: 'var(--color-text-tertiary)' }}
+            >
+              Next 24 Hours
+            </div>
+            <div className="overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+              <div className="flex gap-2 pb-2" style={{ minWidth: 'max-content' }}>
+                {hourly.map((h) => (
+                  <motion.div
+                    key={h.time}
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="flex flex-col items-center gap-1.5 px-3 py-3 rounded-xl min-w-[64px]"
+                    style={{
+                      background: 'rgba(255,255,255,0.04)',
+                      border: '1px solid var(--color-border-hairline)',
+                    }}
+                  >
+                    <span className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+                      {formatHour(h.time)}
+                    </span>
+                    <span className="text-xl">{wmoEmoji(h.weatherCode)}</span>
+                    <span
+                      className="text-sm font-medium"
+                      style={{ color: 'var(--color-text-primary)' }}
+                    >
+                      {Math.round(h.temp)}°
+                    </span>
+                    {h.precipProbability > 0 && (
+                      <span className="text-xs text-blue-400">{h.precipProbability}%</span>
+                    )}
+                  </motion.div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 7-day forecast */}
+        {daily.length > 0 && (
+          <div>
+            <div
+              className="text-xs font-medium uppercase tracking-wider mb-3"
+              style={{ color: 'var(--color-text-tertiary)' }}
+            >
+              7-Day Forecast
+            </div>
+            <div
+              className="rounded-2xl overflow-hidden"
+              style={{
+                background: 'rgba(20,20,28,0.80)',
+                border: '1px solid var(--color-border-hairline)',
                 backdropFilter: 'blur(12px)',
                 WebkitBackdropFilter: 'blur(12px)',
               }}
             >
-              {/* Decorative circles */}
-              <div
-                className="pointer-events-none absolute"
-                style={{
-                  top: -40,
-                  right: -40,
-                  width: 160,
-                  height: 160,
-                  borderRadius: '50%',
-                  background: 'rgba(139,92,246,0.08)',
-                }}
-              />
-              <div
-                className="pointer-events-none absolute"
-                style={{
-                  bottom: -20,
-                  right: 60,
-                  width: 80,
-                  height: 80,
-                  borderRadius: '50%',
-                  background: 'rgba(96,165,250,0.08)',
-                }}
-              />
-
-              <div className="flex items-start justify-between mb-6 relative">
-                <div>
-                  <div className="flex items-start gap-1 mb-1">
-                    <span
-                      className="leading-none font-light"
-                      style={{
-                        fontSize: 80,
-                        color: 'var(--color-text-primary)',
-                        letterSpacing: '-0.04em',
-                        fontFamily: 'var(--font-display)',
-                      }}
-                    >
-                      {Math.round(current.temp)}
-                    </span>
-                    <span
-                      className="font-light mt-3"
-                      style={{ fontSize: 28, color: 'var(--color-text-secondary)' }}
-                    >
-                      °C
-                    </span>
-                  </div>
-                  <p
-                    className="text-lg capitalize mb-1"
-                    style={{ color: 'var(--color-text-secondary)' }}
-                  >
-                    {current.description}
-                  </p>
-                  <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
-                    Feels like {Math.round(current.feelsLike)}°C
-                  </p>
-                </div>
-                <div className="text-[72px] leading-none opacity-80">
-                  {wmoEmoji(current.weatherCode)}
-                </div>
-              </div>
-
-              {/* Stats strip */}
-              <div className="flex gap-5 relative">
-                {[
-                  { Icon: Wind, label: 'Wind', value: `${Math.round(current.windSpeed)} km/h` },
-                  { Icon: Droplets, label: 'Humidity', value: `${current.humidity}%` },
-                  {
-                    Icon: Thermometer,
-                    label: 'Feels like',
-                    value: `${Math.round(current.feelsLike)}°`,
-                  },
-                ].map(({ Icon, label, value }) => (
-                  <div key={label} className="flex-1">
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <Icon size={12} style={{ color: 'var(--color-text-tertiary)' }} />
-                      <span className="text-[10px]" style={{ color: 'var(--color-text-tertiary)' }}>
-                        {label}
-                      </span>
-                    </div>
-                    <p
-                      className="text-sm font-medium"
-                      style={{ color: 'var(--color-text-primary)' }}
-                    >
-                      {value}
-                    </p>
-                  </div>
-                ))}
-              </div>
-
-              {/* Sunrise / Sunset */}
-              {daily[0] && (
-                <div
-                  className="flex items-center gap-6 mt-5 pt-4 relative"
-                  style={{ borderTop: '1px solid var(--color-border-hairline)' }}
-                >
-                  <div
-                    className="flex items-center gap-2 text-sm"
-                    style={{ color: 'var(--color-text-secondary)' }}
-                  >
-                    <Sunrise size={14} style={{ color: 'var(--color-state-warning)' }} />
-                    <span>{formatTime(daily[0].sunrise)}</span>
-                  </div>
-                  <div
-                    className="flex items-center gap-2 text-sm"
-                    style={{ color: 'var(--color-text-secondary)' }}
-                  >
-                    <Sunset size={14} style={{ color: 'var(--color-accent-mid)' }} />
-                    <span>{formatTime(daily[0].sunset)}</span>
-                  </div>
-                  {daily[0].precipSum > 0 && (
-                    <div
-                      className="flex items-center gap-2 text-sm"
-                      style={{ color: 'var(--color-text-secondary)' }}
-                    >
-                      <CloudRain size={14} style={{ color: 'var(--color-text-tertiary)' }} />
-                      <span>{daily[0].precipSum.toFixed(1)} mm today</span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </motion.div>
-          )}
-
-          {/* Briefing summary (when no alert — alert shows it already) */}
-          {briefing && briefing.alertLevel === 'none' && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="px-4 py-3 rounded-xl text-sm"
-              style={{
-                background: 'rgba(255,255,255,0.04)',
-                border: '1px solid var(--color-border-hairline)',
-                color: 'var(--color-text-secondary)',
-              }}
-            >
-              {briefing.summary}
-            </motion.div>
-          )}
-
-          {/* Hourly strip */}
-          {hourly.length > 0 && (
-            <div>
-              <div
-                className="text-xs font-medium uppercase tracking-wider mb-3"
-                style={{ color: 'var(--color-text-tertiary)' }}
-              >
-                Next 24 Hours
-              </div>
-              <div className="overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
-                <div className="flex gap-2 pb-2" style={{ minWidth: 'max-content' }}>
-                  {hourly.map((h) => (
-                    <motion.div
-                      key={h.time}
-                      initial={{ opacity: 0, scale: 0.95 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      className="flex flex-col items-center gap-1.5 px-3 py-3 rounded-xl min-w-[64px]"
-                      style={{
-                        background: 'rgba(255,255,255,0.04)',
-                        border: '1px solid var(--color-border-hairline)',
-                      }}
-                    >
-                      <span className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
-                        {formatHour(h.time)}
-                      </span>
-                      <span className="text-xl">{wmoEmoji(h.weatherCode)}</span>
-                      <span
-                        className="text-sm font-medium"
-                        style={{ color: 'var(--color-text-primary)' }}
-                      >
-                        {Math.round(h.temp)}°
-                      </span>
-                      {h.precipProbability > 0 && (
-                        <span className="text-xs text-blue-400">{h.precipProbability}%</span>
-                      )}
-                    </motion.div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 7-day forecast */}
-          {daily.length > 0 && (
-            <div>
-              <div
-                className="text-xs font-medium uppercase tracking-wider mb-3"
-                style={{ color: 'var(--color-text-tertiary)' }}
-              >
-                7-Day Forecast
-              </div>
-              <div
-                className="rounded-2xl overflow-hidden"
-                style={{
-                  background: 'rgba(20,20,28,0.80)',
-                  border: '1px solid var(--color-border-hairline)',
-                  backdropFilter: 'blur(8px)',
-                  WebkitBackdropFilter: 'blur(8px)',
-                }}
-              >
-                {daily.map((day, i) => {
-                  const range = daily.reduce(
-                    (acc, d) => ({
-                      min: Math.min(acc.min, d.tempMin),
-                      max: Math.max(acc.max, d.tempMax),
-                    }),
-                    { min: Infinity, max: -Infinity },
-                  )
+              {(() => {
+                const range = daily.reduce(
+                  (acc, d) => ({
+                    min: Math.min(acc.min, d.tempMin),
+                    max: Math.max(acc.max, d.tempMax),
+                  }),
+                  { min: Infinity, max: -Infinity },
+                )
+                return daily.map((day, i) => {
                   const barLeft = ((day.tempMin - range.min) / (range.max - range.min)) * 100
                   const barWidth = ((day.tempMax - day.tempMin) / (range.max - range.min)) * 100
 
@@ -686,61 +659,61 @@ export function WeatherScreen(): ReactElement {
                       )}
                     </motion.div>
                   )
-                })}
-              </div>
+                })
+              })()}
             </div>
-          )}
+          </div>
+        )}
 
-          {/* Loading skeleton */}
-          {loading && !current && (
-            <div className="space-y-3">
-              <div
-                className="h-40 rounded-2xl animate-pulse"
-                style={{
-                  background: 'rgba(255,255,255,0.04)',
-                  border: '1px solid var(--color-border-hairline)',
-                }}
-              />
-              <div
-                className="h-20 rounded-xl animate-pulse"
-                style={{
-                  background: 'rgba(255,255,255,0.04)',
-                  border: '1px solid var(--color-border-hairline)',
-                }}
-              />
-              <div
-                className="h-48 rounded-2xl animate-pulse"
-                style={{
-                  background: 'rgba(255,255,255,0.04)',
-                  border: '1px solid var(--color-border-hairline)',
-                }}
-              />
-            </div>
-          )}
+        {/* Loading skeleton */}
+        {loading && !current && (
+          <div className="space-y-3">
+            <div
+              className="h-40 rounded-2xl animate-pulse"
+              style={{
+                background: 'rgba(255,255,255,0.04)',
+                border: '1px solid var(--color-border-hairline)',
+              }}
+            />
+            <div
+              className="h-20 rounded-xl animate-pulse"
+              style={{
+                background: 'rgba(255,255,255,0.04)',
+                border: '1px solid var(--color-border-hairline)',
+              }}
+            />
+            <div
+              className="h-48 rounded-2xl animate-pulse"
+              style={{
+                background: 'rgba(255,255,255,0.04)',
+                border: '1px solid var(--color-border-hairline)',
+              }}
+            />
+          </div>
+        )}
 
-          {/* Empty state */}
-          {!loading && !current && !noLocation && (
-            <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
-              <Eye size={32} style={{ color: 'var(--color-text-tertiary)' }} />
-              <div className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
-                Could not load weather data
-              </div>
-              <button
-                onClick={() => void loadWeather()}
-                className="text-xs hover:underline"
-                style={{
-                  color: 'var(--color-accent-mid)',
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'default',
-                }}
-              >
-                Try again
-              </button>
+        {/* Empty state */}
+        {!loading && !current && !noLocation && (
+          <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+            <Eye size={32} style={{ color: 'var(--color-text-tertiary)' }} />
+            <div className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
+              Could not load weather data
             </div>
-          )}
-        </div>
+            <button
+              onClick={() => void loadWeather()}
+              className="text-xs hover:underline"
+              style={{
+                color: 'var(--color-accent-mid)',
+                background: 'none',
+                border: 'none',
+                cursor: 'default',
+              }}
+            >
+              Try again
+            </button>
+          </div>
+        )}
       </div>
-    </div>
+    </ScreenShell>
   )
 }

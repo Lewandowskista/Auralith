@@ -8,13 +8,15 @@ import {
   AssistantAbortParamsSchema,
   AssistantGetSessionParamsSchema,
   AssistantListSessionsParamsSchema,
+  AssistantDeleteSessionParamsSchema,
 } from '@auralith/core-domain'
 import type { OllamaClient } from '@auralith/core-ai'
-import { runTurn } from '@auralith/core-ai'
+import { runTurn, getAiQueue } from '@auralith/core-ai'
 import { hybridSearch, assembleCitations } from '@auralith/core-retrieval'
 import { listToolsForModel, executeTool } from '@auralith/core-tools'
 import type Database from 'better-sqlite3'
 import type { ExecutorDeps } from '@auralith/core-tools'
+import { getAppContextBroker } from '../../ai/app-context-setup'
 
 type AssistantDeps = {
   bundle: DbBundle
@@ -57,7 +59,7 @@ function getDeps(): AssistantDeps {
 function loadRecentTurnHistory(
   sqlite: Database.Database,
   sessionId: string,
-  limit = 12,
+  limit = 20,
 ): CachedTurn[] {
   type TurnRow = {
     role: string
@@ -169,8 +171,177 @@ function listStoredThreads(
 function pushCachedTurn(sessionId: string, turn: CachedTurn): void {
   const history = sessionHistories.get(sessionId) ?? []
   history.push(turn)
-  if (history.length > 12) history.splice(0, history.length - 12)
+  if (history.length > 20) history.splice(0, history.length - 20)
   sessionHistories.set(sessionId, history)
+  if (sessionHistories.size > 50) {
+    const oldest = sessionHistories.keys().next().value
+    if (oldest !== undefined) sessionHistories.delete(oldest)
+  }
+}
+
+export async function sendVoiceMessage(
+  text: string,
+  win: BrowserWindow | null,
+): Promise<{ messageId: string }> {
+  const { bundle, sqlite, chatClient, chatModel, embedClient, embedModel, executorDeps } = getDeps()
+  const settings = createSettingsRepo(bundle.db)
+  const personaOverride = settings.get('assistant.personaOverride', z.string())
+  const messageId = randomUUID()
+  const sessionId = messageId
+
+  abortFlags.set(messageId, false)
+
+  let ragContext = ''
+  let citations: ReturnType<typeof assembleCitations>['citations'] = []
+
+  try {
+    const hits = await hybridSearch(
+      { query: text, topK: 6, mode: 'hybrid' },
+      bundle.db,
+      sqlite,
+      bundle.vec,
+      embedClient,
+      embedModel,
+    )
+    const assembled = assembleCitations(hits)
+    citations = assembled.citations
+    if (assembled.chunks.length > 0) {
+      ragContext = assembled.chunks
+        .map((chunk) => `[${chunk.n}] (${chunk.path})\n${chunk.text}`)
+        .join('\n\n---\n\n')
+    }
+  } catch {
+    // No retrieval context — continue without it.
+  }
+
+  const cachedHistory = sessionHistories.get(sessionId) ?? loadRecentTurnHistory(sqlite, sessionId)
+  sessionHistories.set(sessionId, cachedHistory)
+
+  const history = cachedHistory.map((turn) => ({
+    role: turn.role as 'user' | 'assistant' | 'tool_result',
+    content: turn.content,
+    ...(turn.toolId !== undefined ? { toolId: turn.toolId } : {}),
+    ...(turn.toolResultJson !== undefined ? { toolResultJson: turn.toolResultJson } : {}),
+  }))
+
+  let queue = null as ReturnType<typeof getAiQueue> | null
+  try {
+    queue = getAiQueue()
+  } catch {
+    /* queue not initialized — skip priority signalling */
+  }
+  queue?.beginForegroundAiTask()
+
+  // Build app context snapshot for voice turn
+  let voiceAppContext:
+    | { promptContext: string; capabilitiesIncluded: string[]; hadCloudRestrictions: boolean }
+    | undefined
+  try {
+    const broker = getAppContextBroker()
+    if (broker) {
+      const snapshot = await broker.buildSnapshot({ classifiedIntent: 'chat', userInput: text })
+      if (snapshot.promptContext) {
+        voiceAppContext = {
+          promptContext: snapshot.promptContext,
+          capabilitiesIncluded: snapshot.capabilitiesIncluded,
+          hadCloudRestrictions: snapshot.hadCloudRestrictions,
+        }
+      }
+    }
+  } catch {
+    // Best-effort
+  }
+
+  try {
+    const result = await runTurn({
+      userText: text,
+      sessionId,
+      history,
+      tools: listToolsForModel(),
+      ragContext,
+      ...(personaOverride !== undefined ? { personaOverride } : {}),
+      ...(voiceAppContext !== undefined ? { appContext: voiceAppContext } : {}),
+      deps: {
+        chatClient,
+        chatModel,
+        onToken: (token) => {
+          if (!abortFlags.get(messageId)) {
+            win?.webContents.send('assistant:token', { messageId, token })
+          }
+        },
+        executeTool: async (toolId, toolParams) => {
+          if (abortFlags.get(messageId)) return { outcome: 'cancelled' as const }
+          win?.webContents.send('assistant:toolCall', { messageId, toolId, params: toolParams })
+          const execResult = await executeTool(
+            toolId,
+            toolParams,
+            { traceId: messageId, actor: 'user' },
+            executorDeps,
+          )
+          win?.webContents.send('assistant:toolResult', {
+            messageId,
+            toolId,
+            outcome: execResult.outcome,
+            result: execResult.outcome === 'success' ? execResult.result : undefined,
+          })
+          return execResult
+        },
+        saveTurn: (turn) => {
+          pushCachedTurn(sessionId, {
+            role: turn.role,
+            content: turn.content,
+            ...(turn.toolId !== undefined ? { toolId: turn.toolId } : {}),
+            ...(turn.toolResultJson !== undefined ? { toolResultJson: turn.toolResultJson } : {}),
+          })
+          try {
+            sqlite
+              .prepare(
+                'INSERT INTO conversation_turns(id,session_id,role,content,tool_id,tool_params_json,tool_result_json,created_at) VALUES(?,?,?,?,?,?,?,?)',
+              )
+              .run(
+                randomUUID(),
+                sessionId,
+                turn.role,
+                turn.content,
+                turn.toolId ?? null,
+                turn.toolParamsJson ?? null,
+                turn.toolResultJson ?? null,
+                Date.now(),
+              )
+            sqlite
+              .prepare('INSERT OR IGNORE INTO sessions(id, started_at) VALUES(?, ?)')
+              .run(sessionId, Date.now())
+          } catch {
+            // DB may not be migrated yet on first run.
+          }
+        },
+      },
+    })
+
+    if (!abortFlags.get(messageId)) {
+      win?.webContents.send('assistant:done', {
+        messageId,
+        citations,
+        toolsInvoked: result.toolsInvoked,
+      })
+      try {
+        const summary = result.finalText.slice(0, 200)
+        sqlite.prepare('UPDATE sessions SET summary = ? WHERE id = ?').run(summary, sessionId)
+      } catch {
+        // Best-effort
+      }
+    }
+  } catch (err) {
+    win?.webContents.send('assistant:error', {
+      messageId,
+      error: err instanceof Error ? err.message : 'Turn failed',
+    })
+  } finally {
+    abortFlags.delete(messageId)
+    queue?.endForegroundAiTask()
+  }
+
+  return { messageId }
 }
 
 export function registerAssistantHandlers(): void {
@@ -225,6 +396,39 @@ export function registerAssistantHandlers(): void {
       ...(turn.toolResultJson !== undefined ? { toolResultJson: turn.toolResultJson } : {}),
     }))
 
+    let sendQueue = null as ReturnType<typeof getAiQueue> | null
+    try {
+      sendQueue = getAiQueue()
+    } catch {
+      /* queue not initialized */
+    }
+    sendQueue?.beginForegroundAiTask()
+
+    // Build app context snapshot (weather, news, activity, etc.) for this message.
+    // Runs concurrently with the queue wait — failures are silently ignored.
+    const routeIntent = settings.get('appContext.defaultIntent', z.string()) ?? 'chat'
+    let appContext:
+      | { promptContext: string; capabilitiesIncluded: string[]; hadCloudRestrictions: boolean }
+      | undefined
+    try {
+      const broker = getAppContextBroker()
+      if (broker) {
+        const snapshot = await broker.buildSnapshot({
+          classifiedIntent: routeIntent,
+          userInput: message,
+        })
+        if (snapshot.promptContext) {
+          appContext = {
+            promptContext: snapshot.promptContext,
+            capabilitiesIncluded: snapshot.capabilitiesIncluded,
+            hadCloudRestrictions: snapshot.hadCloudRestrictions,
+          }
+        }
+      }
+    } catch {
+      // App context is best-effort — never block the chat turn
+    }
+
     let turnError = false
     try {
       const result = await runTurn({
@@ -234,6 +438,7 @@ export function registerAssistantHandlers(): void {
         tools: listToolsForModel(),
         ragContext,
         ...(personaOverride !== undefined ? { personaOverride } : {}),
+        ...(appContext !== undefined ? { appContext } : {}),
         deps: {
           chatClient,
           chatModel,
@@ -284,6 +489,10 @@ export function registerAssistantHandlers(): void {
                   turn.toolResultJson ?? null,
                   Date.now(),
                 )
+              // Ensure a sessions row exists for cross-table features
+              sqlite
+                .prepare('INSERT OR IGNORE INTO sessions(id, started_at) VALUES(?, ?)')
+                .run(sessionId, Date.now())
             } catch {
               // DB may not be migrated yet on first run.
             }
@@ -297,6 +506,13 @@ export function registerAssistantHandlers(): void {
           citations,
           toolsInvoked: result.toolsInvoked,
         })
+        // Update session summary for thread list display
+        try {
+          const summary = result.finalText.slice(0, 200)
+          sqlite.prepare('UPDATE sessions SET summary = ? WHERE id = ?').run(summary, sessionId)
+        } catch {
+          // Best-effort; sessions row may not exist yet on first turn
+        }
       }
     } catch (err) {
       turnError = true
@@ -306,6 +522,7 @@ export function registerAssistantHandlers(): void {
       })
     } finally {
       abortFlags.delete(messageId)
+      sendQueue?.endForegroundAiTask()
     }
 
     void turnError
@@ -342,5 +559,18 @@ export function registerAssistantHandlers(): void {
       messageCount: thread.messageCount,
     }))
     return { sessions }
+  })
+
+  registerHandler('assistant.deleteSession', async (params) => {
+    const { sessionId } = AssistantDeleteSessionParamsSchema.parse(params)
+    const { sqlite } = getDeps()
+    try {
+      sqlite.prepare('DELETE FROM conversation_turns WHERE session_id = ?').run(sessionId)
+      sqlite.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId)
+      sessionHistories.delete(sessionId)
+      return { deleted: true }
+    } catch {
+      return { deleted: false }
+    }
   })
 }

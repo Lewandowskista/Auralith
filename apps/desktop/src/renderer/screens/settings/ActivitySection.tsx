@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import type { ReactElement } from 'react'
-import { Clipboard, Monitor, Shield, Trash2 } from 'lucide-react'
+import { Clipboard, Monitor, Shield, Trash2, FolderOpen, Plus, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 type ClipboardSettings = { enabled: boolean }
@@ -28,6 +28,9 @@ export function ActivitySection(): ReactElement {
   const [appSettings, setAppSettings] = useState<AppUsageSettings>({ enabled: false })
   const [clipRedact, setClipRedact] = useState(true)
   const [clearingClip, setClearingClip] = useState(false)
+  const [watchedFolders, setWatchedFolders] = useState<string[]>([])
+  const [savingFolders, setSavingFolders] = useState(false)
+  const [newFolderPath, setNewFolderPath] = useState('')
 
   useEffect(() => {
     void window.auralith.invoke('clipboard.getSettings', {}).then((res) => {
@@ -42,7 +45,39 @@ export function ActivitySection(): ReactElement {
         if (typeof d.value === 'boolean') setClipRedact(d.value)
       }
     })
+    void window.auralith.invoke('activity.getWatchedFolders', {}).then((res) => {
+      if (res.ok) setWatchedFolders((res.data as { folders: string[] }).folders)
+    })
   }, [])
+
+  function addFolder(): void {
+    const trimmed = newFolderPath.trim()
+    if (!trimmed || watchedFolders.includes(trimmed)) return
+    setWatchedFolders((prev) => [...prev, trimmed])
+    setNewFolderPath('')
+  }
+
+  function removeFolder(path: string): void {
+    setWatchedFolders((prev) => prev.filter((f) => f !== path))
+  }
+
+  async function saveWatchedFolders(): Promise<void> {
+    setSavingFolders(true)
+    try {
+      const res = await window.auralith.invoke('activity.setWatchedFolders', {
+        folders: watchedFolders,
+      })
+      if (res.ok) {
+        toast.success(
+          watchedFolders.length > 0
+            ? `Now watching ${watchedFolders.length} folder${watchedFolders.length !== 1 ? 's' : ''}`
+            : 'File watching stopped',
+        )
+      }
+    } finally {
+      setSavingFolders(false)
+    }
+  }
 
   async function toggleClipboard(): Promise<void> {
     const next = !clipSettings.enabled
@@ -96,6 +131,68 @@ export function ActivitySection(): ReactElement {
         </p>
       </div>
 
+      {/* File watching */}
+      <div className="space-y-4" data-testid="file-watching-section">
+        <div className="flex items-center gap-2">
+          <FolderOpen size={14} className="text-[var(--color-text-tertiary)]" />
+          <h3 className="text-sm font-medium text-[var(--color-text-primary)]">Watched folders</h3>
+        </div>
+
+        <p className="text-xs text-[var(--color-text-tertiary)]">
+          Files created, edited, moved, or deleted in these folders appear in your activity
+          timeline.
+        </p>
+
+        {watchedFolders.length > 0 && (
+          <div className="rounded-xl border border-[var(--color-border-hairline)] bg-[var(--color-bg-2)]/30 divide-y divide-[var(--color-border-hairline)]">
+            {watchedFolders.map((folder) => (
+              <div key={folder} className="flex items-center gap-3 px-4 py-2.5">
+                <FolderOpen size={12} className="shrink-0 text-[var(--color-text-tertiary)]" />
+                <span className="flex-1 truncate font-mono text-xs text-[var(--color-text-secondary)]">
+                  {folder}
+                </span>
+                <button
+                  onClick={() => removeFolder(folder)}
+                  className="shrink-0 rounded p-1 text-[var(--color-text-tertiary)] hover:bg-white/5 hover:text-red-400 transition focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-red-500"
+                  aria-label="Remove folder"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={newFolderPath}
+            onChange={(e) => setNewFolderPath(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') addFolder()
+            }}
+            placeholder="Paste a folder path…"
+            className="flex-1 rounded-lg border border-[var(--color-border-hairline)] bg-white/[0.04] px-3 py-2 text-xs text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:border-violet-500/50 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
+          />
+          <button
+            onClick={addFolder}
+            disabled={!newFolderPath.trim()}
+            className="flex items-center gap-1 rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-xs text-[var(--color-text-secondary)] hover:bg-white/5 disabled:opacity-40 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
+          >
+            <Plus size={12} />
+            Add
+          </button>
+        </div>
+
+        <button
+          onClick={() => void saveWatchedFolders()}
+          disabled={savingFolders}
+          className="flex items-center gap-1.5 rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-sm text-[var(--color-text-secondary)] hover:bg-white/5 disabled:opacity-40 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
+        >
+          {savingFolders ? 'Saving…' : 'Save watched folders'}
+        </button>
+      </div>
+
       {/* Clipboard history */}
       <div className="space-y-4" data-testid="clipboard-section">
         <div className="flex items-center gap-2">
@@ -131,7 +228,16 @@ export function ActivitySection(): ReactElement {
                 Detects passwords, tokens, emails, and credit card patterns — stores char count only
               </p>
             </div>
-            <Toggle on={clipRedact} onToggle={() => void toggleRedact()} />
+            <Toggle
+              on={clipRedact}
+              onToggle={
+                clipSettings.enabled
+                  ? () => void toggleRedact()
+                  : () => {
+                      /* disabled when clipboard is off */
+                    }
+              }
+            />
           </div>
         </div>
 

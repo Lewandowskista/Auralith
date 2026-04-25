@@ -21,6 +21,7 @@ import type { Routine } from '@auralith/core-domain'
 import { FadeRise } from '@auralith/design-system'
 import { RoutineEditor } from './RoutineEditor'
 import { RoutineHistoryPanel } from './RoutineHistoryPanel'
+import { ScreenShell } from '../../components/ScreenShell'
 
 type ExampleRoutine = {
   id: string
@@ -47,7 +48,7 @@ const STATUS_ICON: Record<RoutineStatus, ReactElement> = {
   success: <CheckCircle className="h-3.5 w-3.5 text-emerald-400" />,
   failure: <XCircle className="h-3.5 w-3.5 text-red-400" />,
   blocked: <XCircle className="h-3.5 w-3.5 text-amber-400" />,
-  skipped: <SkipForward className="h-3.5 w-3.5 text-[#6F6F80]" />,
+  skipped: <SkipForward className="h-3.5 w-3.5 text-[var(--color-text-tertiary)]" />,
 }
 
 function triggerLabel(trigger: Routine['trigger']): string {
@@ -98,10 +99,17 @@ export function AutomationsScreen(): ReactElement {
   }, [loadRoutines])
 
   const handleToggleEnabled = useCallback(async (r: Routine) => {
+    setRoutines((prev) => prev.map((x) => (x.id === r.id ? { ...x, enabled: !r.enabled } : x)))
     const op = r.enabled ? 'routines.disable' : 'routines.enable'
-    const res = await window.auralith.invoke(op, { id: r.id })
-    if (res.ok) {
-      setRoutines((prev) => prev.map((x) => (x.id === r.id ? { ...x, enabled: !r.enabled } : x)))
+    try {
+      const res = await window.auralith.invoke(op, { id: r.id })
+      if (!res.ok) {
+        setRoutines((prev) => prev.map((x) => (x.id === r.id ? { ...x, enabled: r.enabled } : x)))
+        toast.error('Failed to toggle routine')
+      }
+    } catch {
+      setRoutines((prev) => prev.map((x) => (x.id === r.id ? { ...x, enabled: r.enabled } : x)))
+      toast.error('Failed to toggle routine')
     }
   }, [])
 
@@ -140,27 +148,13 @@ export function AutomationsScreen(): ReactElement {
   }, [loadRoutines])
 
   return (
-    <div data-testid="routines-screen" className="flex h-full flex-col overflow-hidden">
-      {/* Header */}
-      <div
-        className="flex items-center justify-between px-8 py-5"
-        style={{
-          borderBottom: '1px solid var(--color-border-hairline)',
-          background: 'rgba(14,14,20,0.60)',
-          backdropFilter: 'blur(12px)',
-          WebkitBackdropFilter: 'blur(12px)',
-        }}
-      >
-        <div>
-          <h1 className="text-lg font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-            Automations
-          </h1>
-          <p className="text-sm mt-0.5" style={{ color: 'var(--color-text-tertiary)' }}>
-            {routines.length === 0
-              ? 'No routines yet'
-              : `${routines.filter((r) => r.enabled).length} active`}
-          </p>
-        </div>
+    <ScreenShell
+      title="Automations"
+      {...(routines.length > 0 && {
+        subtitle: `${routines.filter((r) => r.enabled).length} active`,
+      })}
+      variant="split"
+      actions={
         <motion.button
           data-testid="routine-create-btn"
           whileTap={{ scale: 0.95 }}
@@ -168,28 +162,13 @@ export function AutomationsScreen(): ReactElement {
             setEditingRoutine(null)
             setEditorOpen(true)
           }}
-          className="flex items-center gap-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
-          style={{
-            padding: '6px 14px',
-            borderRadius: 9,
-            background: 'rgba(139,92,246,0.20)',
-            border: '1px solid rgba(139,92,246,0.25)',
-            color: 'var(--color-accent-mid)',
-            cursor: 'default',
-            fontFamily: 'var(--font-sans)',
-          }}
-          onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
-            e.currentTarget.style.background = 'rgba(139,92,246,0.30)'
-          }}
-          onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
-            e.currentTarget.style.background = 'rgba(139,92,246,0.20)'
-          }}
+          className="flex items-center gap-2 rounded-xl border border-[var(--color-border-accent)] bg-[var(--color-accent-low)]/20 px-3.5 py-1.5 text-sm font-medium text-[var(--color-accent-mid)] transition-colors hover:bg-[var(--color-accent-low)]/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent-low)]"
         >
           <Plus className="h-3.5 w-3.5" />
           New routine
         </motion.button>
-      </div>
-
+      }
+    >
       {/* Tab bar */}
       <div
         className="flex items-center gap-1 px-8 py-0"
@@ -283,7 +262,7 @@ export function AutomationsScreen(): ReactElement {
           <RoutineHistoryPanel routine={historyFor} onClose={() => setHistoryFor(null)} />
         )}
       </AnimatePresence>
-    </div>
+    </ScreenShell>
   )
 }
 
@@ -299,8 +278,8 @@ function EmptyState({ onNew }: { onNew: () => void }): ReactElement {
         <Zap className="h-6 w-6" />
       </div>
       <div>
-        <p className="text-sm font-medium text-[#F4F4F8]">No automations yet</p>
-        <p className="text-sm text-[#6F6F80] mt-1 max-w-xs">
+        <p className="text-sm font-medium text-[var(--color-text-primary)]">No automations yet</p>
+        <p className="text-sm text-[var(--color-text-tertiary)] mt-1 max-w-xs">
           Create a routine to automatically run actions when conditions are met.
         </p>
       </div>
@@ -364,7 +343,7 @@ function RoutineCard({
             'mt-0.5 flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors',
             routine.enabled
               ? 'bg-violet-500/15 text-violet-400 hover:bg-violet-500/25'
-              : 'bg-white/5 text-[#6F6F80] hover:bg-white/10',
+              : 'bg-white/5 text-[var(--color-text-tertiary)] hover:bg-white/10',
           ].join(' ')}
           title={routine.enabled ? 'Disable' : 'Enable'}
         >
@@ -374,23 +353,27 @@ function RoutineCard({
         {/* Info */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-[#F4F4F8] truncate">{routine.name}</span>
+            <span className="text-sm font-medium text-[var(--color-text-primary)] truncate">
+              {routine.name}
+            </span>
             {lastStatus && STATUS_ICON[lastStatus]}
             {!routine.enabled && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.06] text-[#6F6F80]">
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.06] text-[var(--color-text-tertiary)]">
                 disabled
               </span>
             )}
           </div>
           <div className="flex items-center gap-3 mt-1">
-            <span className="text-xs text-[#6F6F80] flex items-center gap-1">
+            <span className="text-xs text-[var(--color-text-tertiary)] flex items-center gap-1">
               <Clock className="h-3 w-3" />
               {triggerLabel(routine.trigger)}
             </span>
-            <span className="text-xs text-[#6F6F80]">→ {routine.action.toolId}</span>
+            <span className="text-xs text-[var(--color-text-tertiary)]">
+              → {routine.action.toolId}
+            </span>
           </div>
           {routine.lastRunAt && (
-            <p className="text-[11px] text-[#4A4A5A] mt-1">
+            <p className="text-[11px] text-[var(--color-text-tertiary)]/60 mt-1">
               Last run {new Date(routine.lastRunAt).toLocaleString()} · {routine.runCount} runs
             </p>
           )}
@@ -454,7 +437,7 @@ function ActionBtn({
         'flex items-center justify-center w-7 h-7 rounded-lg transition-colors disabled:opacity-40',
         danger
           ? 'text-red-400/70 hover:bg-red-500/10'
-          : 'text-[#6F6F80] hover:bg-white/8 hover:text-[#F4F4F8]',
+          : 'text-[var(--color-text-tertiary)] hover:bg-white/[0.08] hover:text-[var(--color-text-primary)]',
       ].join(' ')}
     >
       {children}
@@ -524,8 +507,8 @@ function MarketplacePanel({ onInstalled }: { onInstalled: () => void }): ReactEl
   if (examples.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-3 text-center">
-        <Store className="h-8 w-8 text-[#4A4A5A]" />
-        <p className="text-sm text-[#6F6F80]">No example routines found</p>
+        <Store className="h-8 w-8 text-[var(--color-text-tertiary)]/60" />
+        <p className="text-sm text-[var(--color-text-tertiary)]">No example routines found</p>
       </div>
     )
   }
@@ -541,7 +524,7 @@ function MarketplacePanel({ onInstalled }: { onInstalled: () => void }): ReactEl
               onClick={() => setFilter(cat)}
               className="px-3 py-1 rounded-full text-xs font-medium transition-colors capitalize"
               style={{
-                background: filter === cat ? 'rgba(139,92,246,0.20)' : 'rgba(255,255,255,0.04)',
+                background: filter === cat ? 'rgba(139,92,246,0.15)' : 'rgba(255,255,255,0.04)',
                 border: `1px solid ${filter === cat ? 'rgba(139,92,246,0.35)' : 'var(--color-border-hairline)'}`,
                 color: filter === cat ? 'var(--color-accent-mid)' : 'var(--color-text-tertiary)',
               }}
@@ -584,21 +567,23 @@ function MarketplacePanel({ onInstalled }: { onInstalled: () => void }): ReactEl
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-medium text-[#F4F4F8]">{ex.name}</span>
+                        <span className="text-sm font-medium text-[var(--color-text-primary)]">
+                          {ex.name}
+                        </span>
                         <span
                           className={`text-[10px] px-1.5 py-0.5 rounded capitalize font-medium ${colorClass}`}
                         >
                           {ex.category}
                         </span>
                       </div>
-                      <p className="text-xs text-[#6F6F80] mt-1 leading-relaxed">
+                      <p className="text-xs text-[var(--color-text-tertiary)] mt-1 leading-relaxed">
                         {ex.description}
                       </p>
                     </div>
                   </div>
 
                   <div className="flex items-center justify-between mt-auto">
-                    <span className="text-[11px] text-[#4A4A5A]">
+                    <span className="text-[11px] text-[var(--color-text-tertiary)]/60">
                       {ex.actions.length} {ex.actions.length === 1 ? 'action' : 'actions'}
                     </span>
                     <motion.button

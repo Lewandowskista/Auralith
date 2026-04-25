@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { ReactElement } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Square, BookOpen, X, MessageSquare, Plus } from 'lucide-react'
+import { Send, Square, BookOpen, X, MessageSquare, Plus, Trash2 } from 'lucide-react'
 import { OllamaBanner } from '../../components/OllamaBanner'
 import { useOllamaStatus } from '../../hooks/useOllamaStatus'
+import { renderMarkdown } from '../../lib/markdown'
+import { toast } from 'sonner'
 
 type Citation = {
   n: number
@@ -33,28 +35,6 @@ type Thread = {
   messageCount?: number
 }
 
-function renderMarkdown(text: string): ReactElement[] {
-  return text.split('\n').map((line, i, arr) => {
-    const isBullet = line.startsWith('• ')
-    const html = (isBullet ? line.slice(2) : line).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    return (
-      <span key={i}>
-        {isBullet ? (
-          <span style={{ display: 'block', paddingLeft: 14, position: 'relative' }}>
-            <span style={{ position: 'absolute', left: 4, color: 'var(--color-accent-low)' }}>
-              •
-            </span>
-            <span dangerouslySetInnerHTML={{ __html: html }} />
-          </span>
-        ) : (
-          <span dangerouslySetInnerHTML={{ __html: html }} />
-        )}
-        {i < arr.length - 1 && <br />}
-      </span>
-    )
-  })
-}
-
 function formatThreadLabel(thread: Thread): string {
   const ts = thread.lastMessageAt ?? thread.startedAt
   const date = new Date(ts)
@@ -75,6 +55,33 @@ function normalizeThreadMessages(
   }))
 }
 
+const SUGGESTIONS = [
+  { label: 'Summarise my recent activity', icon: '⚡' },
+  { label: "What's in my knowledge base?", icon: '📚' },
+  { label: 'Help me write something', icon: '✍️' },
+  { label: "What are today's top news stories?", icon: '📰' },
+] as const
+
+function ThinkingDots(): ReactElement {
+  return (
+    <span className="inline-flex items-center gap-[3px]" aria-label="Thinking">
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          style={{
+            width: 5,
+            height: 5,
+            borderRadius: '50%',
+            background: 'var(--color-accent-mid)',
+            display: 'inline-block',
+            animation: `thinking-dot 1.2s ease-in-out ${i * 0.2}s infinite`,
+          }}
+        />
+      ))}
+    </span>
+  )
+}
+
 export function AssistantScreen(): ReactElement {
   const [threads, setThreads] = useState<Thread[]>([])
   const [threadsLoading, setThreadsLoading] = useState(true)
@@ -84,9 +91,12 @@ export function AssistantScreen(): ReactElement {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null)
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null)
   const [citationOpen, setCitationOpen] = useState(false)
+  const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const ollamaStatus = useOllamaStatus()
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const streamedLengthRef = useRef<Record<string, number>>({})
+  const { status: ollamaStatus, retry: retryOllama } = useOllamaStatus()
 
   const loadThreads = useCallback(async (): Promise<Thread[]> => {
     const res = await window.auralith.invoke('assistant.listSessions', { limit: 20, offset: 0 })
@@ -101,7 +111,10 @@ export function AssistantScreen(): ReactElement {
 
   const loadThread = useCallback(async (threadId: string) => {
     const res = await window.auralith.invoke('assistant.getSession', { sessionId: threadId })
-    if (!res.ok) return
+    if (!res.ok) {
+      toast.error('Failed to load thread')
+      return
+    }
     const data = res.data as {
       sessionId: string
       messages: Array<{ id: string; role: 'user' | 'assistant'; content: string; ts: number }>
@@ -128,6 +141,24 @@ export function AssistantScreen(): ReactElement {
     })
     textareaRef.current?.focus()
   }, [activeMessageId])
+
+  const deleteThread = useCallback(
+    async (threadId: string) => {
+      const res = await window.auralith.invoke('assistant.deleteSession', { sessionId: threadId })
+      if (res.ok) {
+        setThreads((prev) => prev.filter((t) => t.id !== threadId))
+        if (activeThreadId === threadId) {
+          startNewThread()
+        }
+        setDeletingThreadId(null)
+        toast.success('Thread deleted')
+      } else {
+        toast.error('Failed to delete thread')
+        setDeletingThreadId(null)
+      }
+    },
+    [activeThreadId, startNewThread],
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -193,6 +224,15 @@ export function AssistantScreen(): ReactElement {
           message.id === messageId ? { ...message, content: message.content + token } : message,
         ),
       )
+      // Advance the settled boundary once per paint frame so bursts of chars
+      // land in one animated tail span, giving a word-at-a-time fade-in feel.
+      requestAnimationFrame(() => {
+        setMessages((prev) => {
+          const msg = prev.find((m) => m.id === messageId)
+          if (msg) streamedLengthRef.current[messageId] = msg.content.length
+          return prev
+        })
+      })
     })
     const unsubDone = window.auralith.on('assistant:done', (data) => {
       const { messageId, citations } = data as { messageId: string; citations: Citation[] }
@@ -201,6 +241,7 @@ export function AssistantScreen(): ReactElement {
           message.id === messageId ? { ...message, streaming: false, citations } : message,
         ),
       )
+      delete streamedLengthRef.current[messageId]
       setActiveMessageId(null)
       void loadThreads()
     })
@@ -224,8 +265,22 @@ export function AssistantScreen(): ReactElement {
   }, [loadThreads])
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const isCurrentlyStreaming = messages.some((m) => m.streaming)
+    if (isCurrentlyStreaming && scrollContainerRef.current) {
+      const el = scrollContainerRef.current
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+      if (isNearBottom) el.scrollTop = el.scrollHeight
+    } else {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
   }, [messages])
+
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`
+  }, [input])
 
   const send = useCallback(async () => {
     const text = input.trim()
@@ -294,7 +349,7 @@ export function AssistantScreen(): ReactElement {
   }
 
   function renderContent(content: string, citations?: Citation[]): ReactElement {
-    if (!citations?.length) return <>{renderMarkdown(content)}</>
+    if (!citations?.length) return renderMarkdown(content)
     const parts = content.split(/(\[\^\d+\])/g)
     return (
       <>
@@ -372,7 +427,7 @@ export function AssistantScreen(): ReactElement {
             disabled={activeMessageId !== null}
             className="flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition disabled:opacity-40"
             style={{
-              background: '#7C3AED',
+              background: 'var(--color-accent-low)',
               color: '#fff',
               border: 'none',
               cursor: 'default',
@@ -408,42 +463,111 @@ export function AssistantScreen(): ReactElement {
             <div className="flex flex-col gap-2">
               {threads.map((thread) => {
                 const active = activeThreadId === thread.id
+                const isDeleting = deletingThreadId === thread.id
                 return (
-                  <button
+                  <div
                     key={thread.id}
-                    onClick={() => {
-                      if (!activeMessageId) void loadThread(thread.id)
-                    }}
-                    className="rounded-2xl px-3 py-3 text-left transition"
+                    className="group relative rounded-2xl transition"
                     style={{
                       border: active
                         ? '1px solid var(--color-border-accent)'
                         : '1px solid var(--color-border-hairline)',
-                      background: active ? 'rgba(139,92,246,0.12)' : 'rgba(255,255,255,0.03)',
-                      cursor: activeMessageId ? 'not-allowed' : 'default',
+                      background: isDeleting
+                        ? 'rgba(248,113,113,0.08)'
+                        : active
+                          ? 'rgba(139,92,246,0.12)'
+                          : 'rgba(255,255,255,0.03)',
                       opacity: activeMessageId && !active ? 0.65 : 1,
                     }}
                   >
-                    <div className="flex items-start gap-2">
-                      <div className="min-w-0 flex-1">
+                    {isDeleting ? (
+                      <div className="px-3 py-3">
                         <p
-                          className="truncate text-sm font-medium"
-                          style={{ color: 'var(--color-text-primary)' }}
+                          className="text-xs font-medium mb-2"
+                          style={{ color: 'var(--color-state-danger)' }}
                         >
-                          {thread.title?.trim() || 'Untitled thread'}
+                          Delete this thread?
                         </p>
-                        <p className="mt-1 text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
-                          {thread.messageCount ?? 0} message{thread.messageCount === 1 ? '' : 's'}
-                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => void deleteThread(thread.id)}
+                            className="flex-1 rounded-lg py-1 text-xs font-semibold text-white transition-opacity hover:opacity-90"
+                            style={{
+                              background: 'var(--color-state-danger)',
+                              border: 'none',
+                              cursor: 'default',
+                            }}
+                          >
+                            Delete
+                          </button>
+                          <button
+                            onClick={() => setDeletingThreadId(null)}
+                            className="flex-1 rounded-lg py-1 text-xs transition-colors"
+                            style={{
+                              border: '1px solid var(--color-border-hairline)',
+                              background: 'transparent',
+                              color: 'var(--color-text-secondary)',
+                              cursor: 'default',
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
                       </div>
-                      <span
-                        className="shrink-0 text-[11px]"
-                        style={{ color: 'var(--color-text-tertiary)' }}
-                      >
-                        {formatThreadLabel(thread)}
-                      </span>
-                    </div>
-                  </button>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => {
+                            if (!activeMessageId) void loadThread(thread.id)
+                          }}
+                          className="w-full px-3 py-3 text-left"
+                          style={{ cursor: activeMessageId ? 'not-allowed' : 'default' }}
+                        >
+                          <div className="flex items-start gap-2">
+                            <div className="min-w-0 flex-1">
+                              <p
+                                className="truncate text-sm font-medium"
+                                style={{ color: 'var(--color-text-primary)' }}
+                              >
+                                {thread.title?.trim() || 'Untitled thread'}
+                              </p>
+                              <p
+                                className="mt-1 text-xs"
+                                style={{ color: 'var(--color-text-tertiary)' }}
+                              >
+                                {thread.messageCount ?? 0} message
+                                {thread.messageCount === 1 ? '' : 's'}
+                              </p>
+                            </div>
+                            <span
+                              className="shrink-0 text-[11px]"
+                              style={{ color: 'var(--color-text-tertiary)' }}
+                            >
+                              {formatThreadLabel(thread)}
+                            </span>
+                          </div>
+                        </button>
+                        {!activeMessageId && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setDeletingThreadId(thread.id)
+                            }}
+                            className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                            style={{
+                              background: 'rgba(248,113,113,0.12)',
+                              border: 'none',
+                              cursor: 'default',
+                              color: 'var(--color-state-danger)',
+                            }}
+                            aria-label="Delete thread"
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
                 )
               })}
             </div>
@@ -453,9 +577,9 @@ export function AssistantScreen(): ReactElement {
 
       <div className="flex min-w-0 flex-1">
         <div className="relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden">
-          {ollamaStatus === 'offline' && <OllamaBanner />}
+          {ollamaStatus === 'offline' && <OllamaBanner onRetry={retryOllama} />}
 
-          <div className="flex-1 overflow-y-auto px-8 py-8">
+          <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-8 py-8">
             {messages.length === 0 ? (
               <div className="flex h-full items-center justify-center">
                 <div className="text-center">
@@ -477,6 +601,55 @@ export function AssistantScreen(): ReactElement {
                   <p className="mt-1.5 text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
                     Answers are grounded in your Knowledge spaces and saved by thread.
                   </p>
+                  <motion.div
+                    className="mt-6 flex flex-wrap justify-center gap-2"
+                    initial="hidden"
+                    animate="visible"
+                    variants={{
+                      visible: { transition: { staggerChildren: 0.06, delayChildren: 0.15 } },
+                    }}
+                  >
+                    {SUGGESTIONS.map((s) => (
+                      <motion.button
+                        key={s.label}
+                        variants={{
+                          hidden: { opacity: 0, y: 6, scale: 0.96 },
+                          visible: {
+                            opacity: 1,
+                            y: 0,
+                            scale: 1,
+                            transition: { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] },
+                          },
+                        }}
+                        onClick={() => {
+                          setInput(s.label)
+                          textareaRef.current?.focus()
+                        }}
+                        className="flex items-center gap-1.5 text-xs transition-all"
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 20,
+                          border: '1px solid var(--color-border-subtle)',
+                          background: 'rgba(255,255,255,0.03)',
+                          color: 'var(--color-text-secondary)',
+                          cursor: 'default',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = 'rgba(139,92,246,0.10)'
+                          e.currentTarget.style.borderColor = 'var(--color-border-accent)'
+                          e.currentTarget.style.color = 'var(--color-text-primary)'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'rgba(255,255,255,0.03)'
+                          e.currentTarget.style.borderColor = 'var(--color-border-subtle)'
+                          e.currentTarget.style.color = 'var(--color-text-secondary)'
+                        }}
+                      >
+                        <span>{s.icon}</span>
+                        {s.label}
+                      </motion.button>
+                    ))}
+                  </motion.div>
                 </div>
               </div>
             ) : (
@@ -518,18 +691,42 @@ export function AssistantScreen(): ReactElement {
                               color: 'var(--color-text-primary)',
                             }}
                           >
-                            {renderContent(message.content, message.citations)}
-                            {message.streaming && (
-                              <span
-                                className="ml-0.5 inline-block align-middle"
-                                style={{
-                                  width: 2,
-                                  height: 14,
-                                  background: 'var(--color-accent-mid)',
-                                  animation: 'blink 1s step-end infinite',
-                                  display: 'inline-block',
-                                }}
-                              />
+                            {message.streaming ? (
+                              message.content === '' ? (
+                                <ThinkingDots />
+                              ) : (
+                                <>
+                                  <span style={{ whiteSpace: 'pre-wrap' }}>
+                                    {message.content.slice(
+                                      0,
+                                      streamedLengthRef.current[message.id] ?? 0,
+                                    )}
+                                  </span>
+                                  <span
+                                    key={message.content.length}
+                                    style={{
+                                      whiteSpace: 'pre-wrap',
+                                      animation: 'token-fade-in 0.12s ease-out',
+                                    }}
+                                  >
+                                    {message.content.slice(
+                                      streamedLengthRef.current[message.id] ?? 0,
+                                    )}
+                                  </span>
+                                  <span
+                                    className="ml-0.5 inline-block align-middle"
+                                    style={{
+                                      width: 2,
+                                      height: 14,
+                                      background: 'var(--color-accent-mid)',
+                                      animation: 'cursor-blink 0.9s ease-in-out infinite',
+                                      display: 'inline-block',
+                                    }}
+                                  />
+                                </>
+                              )
+                            ) : (
+                              renderContent(message.content, message.citations)
                             )}
                           </div>
                           {message.citations &&
@@ -593,7 +790,7 @@ export function AssistantScreen(): ReactElement {
           >
             <div className="mx-auto max-w-[720px]">
               <div
-                className="flex items-end gap-2.5 transition-all"
+                className="flex items-center gap-2.5 transition-all"
                 style={{
                   padding: '10px 14px',
                   borderRadius: 14,
@@ -627,6 +824,7 @@ export function AssistantScreen(): ReactElement {
                     lineHeight: 1.5,
                     maxHeight: 140,
                     caretColor: 'var(--color-accent-mid)',
+                    overflowY: 'hidden',
                   }}
                 />
                 {activeMessageId ? (

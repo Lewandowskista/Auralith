@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { ReactElement } from 'react'
-import { Wifi, WifiOff, Loader2, CheckCircle, XCircle, RefreshCw, ChevronDown } from 'lucide-react'
+import { Wifi, WifiOff, Loader2, CheckCircle, XCircle, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 
 type ConnectionState = 'idle' | 'checking' | 'online' | 'offline'
@@ -11,61 +11,36 @@ type Config = {
   chatModel: string
   embedModel: string
   classifierModel: string
+  summarizeModel: string
+  extractModel: string
+  agentModel: string
 }
 
 type ModelPickerProps = {
   label: string
   description: string
   value: string
-  models: string[]
-  onChange: (v: string) => void
-  disabled?: boolean
 }
 
-function ModelPicker({
-  label,
-  description,
-  value,
-  models,
-  onChange,
-  disabled,
-}: ModelPickerProps): ReactElement {
+function ModelPicker({ label, description, value }: ModelPickerProps): ReactElement {
   return (
     <div className="flex items-start justify-between gap-6">
       <div className="min-w-0">
         <p className="text-sm font-medium text-[#F4F4F8]">{label}</p>
         <p className="mt-0.5 text-xs text-[#6F6F80]">{description}</p>
       </div>
-      <div className="relative shrink-0">
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          disabled={disabled}
-          className="appearance-none rounded-lg pr-7 pl-3 py-1.5 text-sm text-[#F4F4F8] focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-40 cursor-default"
-          style={{
-            background: 'rgba(255,255,255,0.06)',
-            border: '1px solid rgba(255,255,255,0.10)',
-            minWidth: 200,
-            fontFamily: 'var(--font-sans)',
-          }}
-        >
-          {value && !models.includes(value) && <option value={value}>{value}</option>}
-          {models.length === 0 && (
-            <option value="" disabled>
-              No models available
-            </option>
-          )}
-          {models.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
-        <ChevronDown
-          size={12}
-          className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[#6F6F80]"
-        />
-      </div>
+      <span
+        className="shrink-0 rounded-lg px-3 py-1.5 text-sm font-mono text-[#A6A6B3]"
+        style={{
+          background: 'rgba(255,255,255,0.04)',
+          border: '1px solid rgba(255,255,255,0.07)',
+          minWidth: 200,
+          display: 'inline-block',
+          textAlign: 'left',
+        }}
+      >
+        {value}
+      </span>
     </div>
   )
 }
@@ -138,14 +113,26 @@ function FeatureTestRow({
   )
 }
 
+const ROLE_BADGE: Record<string, { label: string; color: string }> = {
+  chatModel: { label: 'chat', color: 'bg-violet-500/15 text-violet-300' },
+  embedModel: { label: 'embed', color: 'bg-blue-500/15 text-blue-300' },
+  classifierModel: { label: 'classifier', color: 'bg-cyan-500/15 text-cyan-300' },
+  summarizeModel: { label: 'summarize', color: 'bg-amber-500/15 text-amber-300' },
+  extractModel: { label: 'extract', color: 'bg-pink-500/15 text-pink-300' },
+  agentModel: { label: 'agent', color: 'bg-emerald-500/15 text-emerald-300' },
+}
+
 export function OllamaSection(): ReactElement {
   const [config, setConfig] = useState<Config>({
     url: 'http://localhost:11434',
-    chatModel: 'qwen2.5:7b-instruct',
+    chatModel: 'qwen3:8b',
     embedModel: 'nomic-embed-text',
-    classifierModel: 'nomic-embed-text',
+    classifierModel: 'phi4-mini:3.8b',
+    summarizeModel: 'phi4-mini:3.8b',
+    extractModel: 'phi4-mini:3.8b',
+    agentModel: 'qwen3:8b',
   })
-  const [urlDraft, setUrlDraft] = useState('')
+  const [urlDraft, setUrlDraft] = useState('http://localhost:11434')
   const [models, setModels] = useState<string[]>([])
   const [connectionState, setConnectionState] = useState<ConnectionState>('idle')
   const [loading, setLoading] = useState(true)
@@ -160,18 +147,6 @@ export function OllamaSection(): ReactElement {
     latencyMs?: number
     error?: string
   }>({ state: 'idle' })
-
-  useEffect(() => {
-    void (async () => {
-      const res = await window.auralith.invoke('ollama.getConfig', {})
-      if (res.ok) {
-        const d = res.data as Config
-        setConfig(d)
-        setUrlDraft(d.url)
-      }
-      setLoading(false)
-    })()
-  }, [])
 
   const testConnection = useCallback(async (url: string): Promise<void> => {
     setConnectionState('checking')
@@ -194,18 +169,32 @@ export function OllamaSection(): ReactElement {
     }
   }, [])
 
+  useEffect(() => {
+    void (async () => {
+      const res = await window.auralith.invoke('ollama.getConfig', {})
+      if (res.ok) {
+        const d = res.data as Config
+        setConfig(d)
+        setUrlDraft(d.url)
+        // Auto-probe on load so the UI reflects live Ollama status immediately
+        void testConnection(d.url)
+      }
+      setLoading(false)
+    })()
+  }, [testConnection])
+
   async function handleSave(): Promise<void> {
     setSaving(true)
-    const res = await window.auralith.invoke('ollama.saveConfig', {
+    const cfgRes = await window.auralith.invoke('ollama.saveConfig', {
       url: urlDraft,
       chatModel: config.chatModel,
       embedModel: config.embedModel,
       classifierModel: config.classifierModel,
     })
     setSaving(false)
-    if (res.ok) {
+    if (cfgRes.ok) {
       setConfig((c) => ({ ...c, url: urlDraft }))
-      toast.success('Ollama configuration saved — restart may be needed for model changes')
+      toast.success('Ollama URL saved')
     } else {
       toast.error('Failed to save configuration')
     }
@@ -243,13 +232,25 @@ export function OllamaSection(): ReactElement {
   }
 
   const isDirty = urlDraft !== config.url
+  const urlValid = urlDraft.startsWith('http://') || urlDraft.startsWith('https://')
+
+  // Build a map of model → assigned roles for the downloaded models list
+  const modelRoleMap: Record<string, string[]> = {}
+  const roleKeys = Object.keys(ROLE_BADGE) as (keyof typeof ROLE_BADGE)[]
+  for (const key of roleKeys) {
+    const model = config[key as keyof Config]
+    if (model) {
+      if (!modelRoleMap[model]) modelRoleMap[model] = []
+      modelRoleMap[model].push(key)
+    }
+  }
 
   return (
     <div className="max-w-lg space-y-8">
       <div>
         <h2 className="mb-1 text-lg font-semibold text-[#F4F4F8]">Ollama</h2>
         <p className="text-sm text-[#6F6F80]">
-          Configure the local Ollama endpoint and model selection.
+          Configure the local Ollama endpoint and per-task model assignments.
         </p>
       </div>
 
@@ -277,10 +278,18 @@ export function OllamaSection(): ReactElement {
                 className="w-full rounded-lg px-3 py-1.5 text-sm text-[#F4F4F8] placeholder-[#4B4B5A] focus:outline-none focus:ring-2 focus:ring-violet-500"
                 style={{
                   background: 'rgba(255,255,255,0.05)',
-                  border: '1px solid rgba(255,255,255,0.08)',
+                  border:
+                    urlDraft && !urlValid
+                      ? '1px solid rgba(239,68,68,0.5)'
+                      : '1px solid rgba(255,255,255,0.08)',
                   fontFamily: 'var(--font-mono, monospace)',
                 }}
               />
+              {urlDraft && !urlValid && (
+                <p className="mt-1 px-1 text-[10px] text-red-400">
+                  Must start with http:// or https://
+                </p>
+              )}
             </div>
           </div>
 
@@ -314,7 +323,7 @@ export function OllamaSection(): ReactElement {
             </div>
             <button
               onClick={() => void testConnection(urlDraft)}
-              disabled={connectionState === 'checking'}
+              disabled={connectionState === 'checking' || !urlValid}
               className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-[#A6A6B3] transition-colors disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
               style={{
                 background: 'rgba(255,255,255,0.06)',
@@ -338,9 +347,11 @@ export function OllamaSection(): ReactElement {
         </div>
       </div>
 
-      {/* Model selection */}
+      {/* Model assignments */}
       <div className="space-y-3">
-        <p className="text-xs font-semibold uppercase tracking-widest text-[#6F6F80]">Models</p>
+        <p className="text-xs font-semibold uppercase tracking-widest text-[#6F6F80]">
+          Model Assignments
+        </p>
         <div
           className="rounded-xl divide-y"
           style={{
@@ -351,35 +362,49 @@ export function OllamaSection(): ReactElement {
         >
           <div className="px-4 py-3">
             <ModelPicker
-              label="Chat model"
-              description="Used by the assistant for conversation and tool use."
+              label="Chat"
+              description="Multi-turn assistant conversation and tool use."
               value={config.chatModel}
-              models={models}
-              onChange={(v) => setConfig((c) => ({ ...c, chatModel: v }))}
             />
           </div>
           <div className="px-4 py-3">
             <ModelPicker
-              label="Embed model"
-              description="Used for semantic search, knowledge indexing, and similarity."
-              value={config.embedModel}
-              models={models}
-              onChange={(v) => setConfig((c) => ({ ...c, embedModel: v }))}
+              label="Agent"
+              description="Agentic planning, reflection, and multi-step reasoning."
+              value={config.agentModel}
             />
           </div>
           <div className="px-4 py-3">
             <ModelPicker
-              label="Classifier model"
-              description="Used for news topic classification and content routing."
+              label="Summarize"
+              description="Briefings, news summaries, and activity digests."
+              value={config.summarizeModel}
+            />
+          </div>
+          <div className="px-4 py-3">
+            <ModelPicker
+              label="Classifier"
+              description="Intent classification, content routing, and news tagging."
               value={config.classifierModel}
-              models={models}
-              onChange={(v) => setConfig((c) => ({ ...c, classifierModel: v }))}
+            />
+          </div>
+          <div className="px-4 py-3">
+            <ModelPicker
+              label="Extract"
+              description="Structured data extraction and short rewrites."
+              value={config.extractModel}
+            />
+          </div>
+          <div className="px-4 py-3">
+            <ModelPicker
+              label="Embed"
+              description="Semantic search, knowledge indexing, and similarity."
+              value={config.embedModel}
             />
           </div>
         </div>
         <p className="text-xs text-[#4B4B5A]">
-          Connect to Ollama above to populate the model list. You can also type a model name
-          manually.
+          Model assignments are fixed. Only the Ollama endpoint URL can be changed.
         </p>
       </div>
 
@@ -387,14 +412,14 @@ export function OllamaSection(): ReactElement {
       <div className="flex items-center gap-3">
         <button
           onClick={() => void handleSave()}
-          disabled={saving}
+          disabled={saving || !urlValid}
           className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white transition-opacity disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
           style={{ background: 'var(--color-accent-gradient)' }}
         >
           {saving && <Loader2 size={13} className="animate-spin" />}
           Save configuration
         </button>
-        {isDirty && <p className="text-xs text-amber-400">Unsaved changes</p>}
+        {isDirty && <p className="text-xs text-amber-400">Unsaved URL change — save to apply</p>}
       </div>
 
       {/* Feature tests */}
@@ -403,9 +428,8 @@ export function OllamaSection(): ReactElement {
           Feature Tests
         </p>
         <p className="text-xs text-[#6F6F80]">
-          Run end-to-end smoke tests against each AI feature using the selected models. Save your
-          configuration first. Cold starts may take 30–60 seconds while Ollama loads the model into
-          memory.
+          Run end-to-end smoke tests against each AI feature using the selected models. Cold starts
+          may take 30–60 seconds while Ollama loads the model into memory.
         </p>
         <div
           className="rounded-xl px-4"
@@ -458,22 +482,19 @@ export function OllamaSection(): ReactElement {
                 style={{ borderTop: i > 0 ? '1px solid rgba(255,255,255,0.04)' : undefined }}
               >
                 <span className="font-mono text-sm text-[#A6A6B3]">{m}</span>
-                <div className="flex gap-1">
-                  {m === config.chatModel && (
-                    <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] text-violet-300">
-                      chat
-                    </span>
-                  )}
-                  {m === config.embedModel && (
-                    <span className="rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] text-blue-300">
-                      embed
-                    </span>
-                  )}
-                  {m === config.classifierModel && m !== config.embedModel && (
-                    <span className="rounded-full bg-cyan-500/15 px-2 py-0.5 text-[10px] text-cyan-300">
-                      classifier
-                    </span>
-                  )}
+                <div className="flex gap-1 flex-wrap justify-end">
+                  {(modelRoleMap[m] ?? []).map((roleKey) => {
+                    const badge = ROLE_BADGE[roleKey]
+                    if (!badge) return null
+                    return (
+                      <span
+                        key={roleKey}
+                        className={`rounded-full px-2 py-0.5 text-[10px] ${badge.color}`}
+                      >
+                        {badge.label}
+                      </span>
+                    )
+                  })}
                 </div>
               </div>
             ))}

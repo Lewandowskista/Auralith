@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import type { ReactElement } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -13,10 +13,14 @@ import {
   Trash2,
   FlaskConical,
   Clock,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { NewsItemCard } from './NewsItemCard'
 import type { NewsItemData } from './NewsItemCard'
+import { ScreenShell } from '../../components/ScreenShell'
+import { renderMarkdown } from '../../lib/markdown'
 
 type Topic = { id: string; name: string; slug: string; analysisOptIn: boolean }
 type Cluster = {
@@ -37,6 +41,27 @@ function timeAgo(ts: number): string {
   return `${Math.floor(h / 24)}d ago`
 }
 
+function FullArticleRenderer({ html }: { html: string }): ReactElement {
+  const text = useMemo(() => {
+    const d = document.createElement('div')
+    d.innerHTML = html
+    return d.textContent ?? ''
+  }, [html])
+  return (
+    <div
+      className="article-body"
+      style={{
+        color: 'var(--color-text-secondary)',
+        fontSize: 14,
+        lineHeight: 1.75,
+        whiteSpace: 'pre-wrap',
+      }}
+    >
+      {text}
+    </div>
+  )
+}
+
 export function NewsScreen(): ReactElement {
   const [topics, setTopics] = useState<Topic[]>([])
   const [activeTopic, setActiveTopic] = useState<Topic | null>(null)
@@ -48,6 +73,8 @@ export function NewsScreen(): ReactElement {
   const [rawItems, setRawItems] = useState<NewsItem[]>([])
   const [addingTopic, setAddingTopic] = useState(false)
   const [newTopicName, setNewTopicName] = useState('')
+  const [readerExpanded, setReaderExpanded] = useState(false)
+  const [readPct, setReadPct] = useState(0)
 
   const loadClusters = useCallback(async (topicId?: string) => {
     const res = await window.auralith.invoke('news.listClusters', {
@@ -79,7 +106,6 @@ export function NewsScreen(): ReactElement {
     if (!res.ok) return
     const loaded = (res.data as { topics: Topic[] }).topics
     if (loaded.length === 0) {
-      // Topics were never seeded — check if onboarding saved preferences and seed now
       try {
         const settingRes = await window.auralith.invoke('settings.get', { key: 'news.topics' })
         if (settingRes.ok) {
@@ -88,15 +114,9 @@ export function NewsScreen(): ReactElement {
             await window.auralith.invoke('news.seedTopics', { topics: saved as string[] })
             const reloaded = await window.auralith.invoke('news.listTopics', {})
             if (reloaded.ok) setTopics((reloaded.data as { topics: Topic[] }).topics)
-            // Kick off the first fetch automatically after seeding
             setFetching(true)
             toast.info('First-time setup — fetching your news feeds…')
-            void window.auralith.invoke('news.triggerFetch', {}).then(() => {
-              setTimeout(() => {
-                void loadClusters(undefined)
-                setFetching(false)
-              }, 12_000)
-            })
+            void window.auralith.invoke('news.triggerFetch', {})
             return
           }
         }
@@ -131,25 +151,26 @@ export function NewsScreen(): ReactElement {
     if (activeCluster) void loadItems(activeCluster.id)
   }, [activeCluster, loadItems])
 
+  useEffect(() => {
+    const unsub = window.auralith.on('news:fetch-complete', () => {
+      void loadClusters(activeTopic?.id)
+      void loadRawItems()
+      setFetching(false)
+    })
+    return unsub
+  }, [activeTopic, loadClusters, loadRawItems])
+
+  // Reset progress when a new item is opened
+  useEffect(() => {
+    setReadPct(0)
+    setReaderExpanded(false)
+  }, [activeItem?.id])
+
   async function handleTriggerFetch() {
     setFetching(true)
     try {
       await window.auralith.invoke('news.triggerFetch', {})
       toast.success('Fetch started — refreshing…')
-      let attempts = 0
-      const poll = setInterval(() => {
-        attempts++
-        void loadClusters(activeTopic?.id).catch(() => {
-          clearInterval(poll)
-          setFetching(false)
-          toast.error('Refresh failed. Try again.')
-        })
-        void loadRawItems()
-        if (attempts >= 12) {
-          clearInterval(poll)
-          setFetching(false)
-        }
-      }, 5_000)
     } catch {
       setFetching(false)
       toast.error('Could not start feed refresh.')
@@ -218,430 +239,602 @@ export function NewsScreen(): ReactElement {
       setActiveTopic((t) => (t ? { ...t, analysisOptIn: !t.analysisOptIn } : t))
   }
 
+  function handleReaderScroll(e: React.UIEvent<HTMLDivElement>) {
+    const el = e.currentTarget
+    const pct = el.scrollTop / (el.scrollHeight - el.clientHeight)
+    setReadPct(Math.min(1, isNaN(pct) ? 0 : pct))
+  }
+
   return (
-    <div data-testid="news-screen" className="flex flex-col h-full overflow-hidden">
-      {/* Header + topic filter rail */}
-      <div
-        style={{
-          borderBottom: '1px solid var(--color-border-hairline)',
-          background: 'rgba(14,14,20,0.60)',
-          backdropFilter: 'blur(12px)',
-          WebkitBackdropFilter: 'blur(12px)',
-          padding: '16px 24px 0',
-          flexShrink: 0,
-        }}
-      >
-        <div className="flex items-center gap-3 mb-3">
-          <h2
-            className="text-sm font-semibold flex-1"
-            style={{ color: 'var(--color-text-primary)' }}
+    <ScreenShell
+      title="News"
+      variant="split"
+      actions={
+        <>
+          <button
+            onClick={() => void handleTriggerFetch()}
+            disabled={fetching}
+            className="flex items-center gap-1.5 rounded-lg border border-[var(--color-border-hairline)] px-3 py-1.5 text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-white/[0.04] disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent-low)]"
+            aria-label="Refresh feeds"
           >
-            News
-          </h2>
-          <div className="flex items-center gap-1.5">
-            <button
-              onClick={() => void handleTriggerFetch()}
-              disabled={fetching}
-              className="flex items-center gap-1.5 text-xs transition disabled:opacity-40 focus-visible:outline-none"
-              style={{
-                padding: '4px 10px',
-                borderRadius: 8,
-                border: '1px solid var(--color-border-hairline)',
-                background: 'transparent',
-                color: 'var(--color-text-secondary)',
-                cursor: 'default',
-                fontFamily: 'var(--font-sans)',
-              }}
-              aria-label="Refresh feeds"
-            >
-              <RefreshCw className={['h-3 w-3', fetching ? 'animate-spin' : ''].join(' ')} />
-              Refresh
-            </button>
-            <button
-              onClick={() => {
-                setAddingTopic((v) => !v)
-                setNewTopicName('')
-              }}
-              className="flex items-center justify-center w-7 h-7 rounded-lg transition"
-              style={{
-                border: '1px solid var(--color-border-hairline)',
-                background: addingTopic ? 'rgba(139,92,246,0.15)' : 'transparent',
-                color: addingTopic ? 'var(--color-accent-mid)' : 'var(--color-text-tertiary)',
-                cursor: 'default',
-              }}
-              aria-label="New topic"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
+            <RefreshCw className={['h-3 w-3', fetching ? 'animate-spin' : ''].join(' ')} />
+            Refresh
+          </button>
+          <button
+            onClick={() => {
+              setAddingTopic((v) => !v)
+              setNewTopicName('')
+            }}
+            className="flex items-center justify-center h-7 w-7 rounded-lg border border-[var(--color-border-hairline)] transition-colors hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent-low)]"
+            style={{
+              background: addingTopic ? 'rgba(139,92,246,0.15)' : 'transparent',
+              color: addingTopic ? 'var(--color-accent-mid)' : 'var(--color-text-tertiary)',
+            }}
+            aria-label="New topic"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </>
+      }
+    >
+      <div className="flex flex-1 flex-col overflow-hidden">
+        {/* Topic filter rail */}
+        <div
+          className="shrink-0 px-6 pt-3"
+          style={{
+            borderBottom: '1px solid var(--color-border-hairline)',
+            background: 'rgba(14,14,20,0.40)',
+          }}
+        >
+          <div className="flex gap-1.5 overflow-x-auto pb-3" style={{ scrollbarWidth: 'none' }}>
+            {[{ id: null, name: 'All' }, ...topics].map((t) => {
+              const isActive = t.id === null ? activeTopic === null : activeTopic?.id === t.id
+              return (
+                <button
+                  key={t.id ?? 'all'}
+                  onClick={() =>
+                    setActiveTopic(
+                      t.id === null ? null : (topics.find((x) => x.id === t.id) ?? null),
+                    )
+                  }
+                  className="shrink-0 transition-all focus-visible:outline-none"
+                  style={{
+                    padding: '5px 14px',
+                    borderRadius: 99,
+                    fontSize: 12,
+                    fontWeight: 500,
+                    border: `1px solid ${isActive ? 'var(--color-border-accent)' : 'var(--color-border-hairline)'}`,
+                    background: isActive ? 'rgba(139,92,246,0.15)' : 'transparent',
+                    color: isActive ? 'var(--color-accent-mid)' : 'var(--color-text-secondary)',
+                    cursor: 'default',
+                    whiteSpace: 'nowrap',
+                    fontFamily: 'var(--font-sans)',
+                  }}
+                >
+                  {t.name}
+                </button>
+              )
+            })}
           </div>
-        </div>
 
-        {/* Topic filter pills */}
-        <div className="flex gap-1.5 overflow-x-auto pb-3" style={{ scrollbarWidth: 'none' }}>
-          {[{ id: null, name: 'All' }, ...topics].map((t) => {
-            const isActive = t.id === null ? activeTopic === null : activeTopic?.id === t.id
-            return (
-              <button
-                key={t.id ?? 'all'}
-                onClick={() =>
-                  setActiveTopic(t.id === null ? null : (topics.find((x) => x.id === t.id) ?? null))
-                }
-                className="transition-all shrink-0"
-                style={{
-                  padding: '5px 14px',
-                  borderRadius: 99,
-                  fontSize: 12,
-                  fontWeight: 500,
-                  border: `1px solid ${isActive ? 'var(--color-border-accent)' : 'var(--color-border-hairline)'}`,
-                  background: isActive ? 'rgba(139,92,246,0.15)' : 'transparent',
-                  color: isActive ? 'var(--color-accent-mid)' : 'var(--color-text-secondary)',
-                  cursor: 'default',
-                  whiteSpace: 'nowrap',
-                  fontFamily: 'var(--font-sans)',
+          {addingTopic && (
+            <div className="flex items-center gap-2 pb-3">
+              <input
+                autoFocus
+                value={newTopicName}
+                onChange={(e) => setNewTopicName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void handleCreateTopic()
+                  if (e.key === 'Escape') {
+                    setAddingTopic(false)
+                    setNewTopicName('')
+                  }
                 }}
+                placeholder="Topic name…"
+                className="flex-1 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-xs text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-violet-500/50 transition"
+              />
+              <button
+                onClick={() => void handleCreateTopic()}
+                disabled={!newTopicName.trim()}
+                className="rounded-lg bg-[var(--color-accent-low)] px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90 disabled:opacity-40"
               >
-                {t.name}
+                Add
               </button>
-            )
-          })}
-        </div>
-
-        {/* Inline new-topic input */}
-        {addingTopic && (
-          <div className="flex items-center gap-2 pb-3">
-            <input
-              autoFocus
-              value={newTopicName}
-              onChange={(e) => setNewTopicName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void handleCreateTopic()
-                if (e.key === 'Escape') {
+              <button
+                onClick={() => {
                   setAddingTopic(false)
                   setNewTopicName('')
-                }
-              }}
-              placeholder="Topic name…"
-              className="flex-1 rounded-lg bg-white/[0.04] px-3 py-1.5 text-xs text-[#F4F4F8] outline-none placeholder:text-[#5F5F6F] border border-white/[0.08] focus:border-violet-500/50 transition"
-            />
+                }}
+                className="rounded-lg px-2 py-1.5 text-xs text-[var(--color-text-tertiary)] transition hover:text-[var(--color-text-primary)]"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Main content */}
+        <div className="flex flex-1 overflow-hidden">
+          {/* Cluster + article list */}
+          <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex flex-col gap-3 max-w-[720px] mx-auto">
+              {clusters.length === 0 && rawItems.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {rawItems.map((item) => (
+                    <NewsItemCard
+                      key={item.id}
+                      item={item}
+                      variant="standard"
+                      onSelect={(i) => setActiveItem(activeItem?.id === i.id ? null : i)}
+                      onToggleSave={handleToggleSave}
+                      onMarkRead={handleMarkRead}
+                    />
+                  ))}
+                </div>
+              ) : clusters.length === 0 ? (
+                <div className="flex h-full items-center justify-center py-20">
+                  <div className="text-center">
+                    <Newspaper
+                      size={28}
+                      className="mx-auto mb-3"
+                      style={{ color: 'var(--color-text-tertiary)' }}
+                    />
+                    <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
+                      No stories yet. Refresh feeds to load news.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                clusters.map((c) => (
+                  <div key={c.id}>
+                    <button
+                      onClick={() => setActiveCluster(activeCluster?.id === c.id ? null : c)}
+                      className="w-full text-left transition-all"
+                      style={{
+                        padding: '14px 16px',
+                        borderRadius: 14,
+                        border: `1px solid ${activeCluster?.id === c.id ? 'var(--color-border-accent)' : 'var(--color-border-hairline)'}`,
+                        background:
+                          activeCluster?.id === c.id
+                            ? 'rgba(139,92,246,0.08)'
+                            : 'rgba(20,20,28,0.80)',
+                        backdropFilter: 'blur(8px)',
+                        WebkitBackdropFilter: 'blur(8px)',
+                        cursor: 'default',
+                        display: 'flex',
+                        gap: 12,
+                      }}
+                      onMouseEnter={(e) => {
+                        if (activeCluster?.id !== c.id)
+                          e.currentTarget.style.borderColor = 'var(--color-border-subtle)'
+                      }}
+                      onMouseLeave={(e) => {
+                        if (activeCluster?.id !== c.id)
+                          e.currentTarget.style.borderColor = 'var(--color-border-hairline)'
+                      }}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div
+                          className="text-sm font-medium leading-snug mb-1.5"
+                          style={{ color: 'var(--color-text-primary)' }}
+                        >
+                          {renderMarkdown(c.summary)}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Layers
+                            className="h-3 w-3"
+                            style={{ color: 'var(--color-text-tertiary)' }}
+                          />
+                          <span
+                            className="text-[11px]"
+                            style={{ color: 'var(--color-text-tertiary)' }}
+                          >
+                            {c.itemCount} articles · {timeAgo(c.createdAt)}
+                          </span>
+                        </div>
+                      </div>
+                      <ChevronRight
+                        className={`h-4 w-4 shrink-0 transition-transform ${activeCluster?.id === c.id ? 'rotate-90' : ''}`}
+                        style={{ color: 'var(--color-text-tertiary)', marginTop: 2 }}
+                      />
+                    </button>
+
+                    <AnimatePresence>
+                      {activeCluster?.id === c.id && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
+                          className="overflow-hidden"
+                        >
+                          <div className="space-y-1.5 mt-2 pl-4">
+                            {items.map((item, index) => (
+                              <NewsItemCard
+                                key={item.id}
+                                item={item}
+                                variant={index === 0 ? 'featured' : 'compact'}
+                                onSelect={(i) => setActiveItem(activeItem?.id === i.id ? null : i)}
+                                onToggleSave={handleToggleSave}
+                                onMarkRead={handleMarkRead}
+                              />
+                            ))}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Article reader panel */}
+          <AnimatePresence>
+            {activeItem && (
+              <motion.aside
+                key={activeItem.id}
+                initial={{ opacity: 0, x: 24 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 24 }}
+                transition={{ duration: 0.24, ease: [0, 0, 0.2, 1] }}
+                className={`shrink-0 flex flex-col overflow-hidden relative ${readerExpanded ? 'w-full' : 'w-[560px]'}`}
+                style={{
+                  borderLeft: '1px solid var(--color-border-hairline)',
+                  background: 'rgba(12,12,18,0.92)',
+                  backdropFilter: 'blur(20px)',
+                  WebkitBackdropFilter: 'blur(20px)',
+                  transition: 'width 0.22s ease',
+                }}
+              >
+                {/* Reading progress bar */}
+                <div
+                  className="absolute top-0 left-0 h-[2px] z-10 pointer-events-none"
+                  style={{
+                    width: `${readPct * 100}%`,
+                    background:
+                      'linear-gradient(90deg, var(--color-accent-low), var(--color-accent-mid))',
+                    transition: 'width 0.1s linear',
+                  }}
+                />
+
+                {/* Sticky header */}
+                <div
+                  className="shrink-0 flex items-center justify-between gap-2 px-5 py-3"
+                  style={{ borderBottom: '1px solid var(--color-border-hairline)' }}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    {activeItem.sourceName && (
+                      <span
+                        className="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                        style={{
+                          background: 'rgba(139,92,246,0.12)',
+                          border: '1px solid rgba(139,92,246,0.25)',
+                          color: 'var(--color-accent-mid)',
+                        }}
+                      >
+                        {activeItem.sourceName}
+                      </span>
+                    )}
+                    <span
+                      className="text-[11px] truncate"
+                      style={{ color: 'var(--color-text-tertiary)' }}
+                    >
+                      {activeItem.publishedAt
+                        ? new Date(activeItem.publishedAt).toLocaleDateString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                            year: 'numeric',
+                          })
+                        : 'Unknown date'}
+                    </span>
+                    {activeItem.readingTimeMin && (
+                      <span
+                        className="flex items-center gap-0.5 text-[11px] shrink-0"
+                        style={{ color: 'var(--color-text-tertiary)' }}
+                      >
+                        <Clock className="h-3 w-3" />
+                        {activeItem.readingTimeMin}m
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => setReaderExpanded((v) => !v)}
+                      className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors hover:bg-white/[0.06]"
+                      style={{ color: 'var(--color-text-tertiary)' }}
+                      aria-label={readerExpanded ? 'Collapse reader' : 'Expand reader'}
+                    >
+                      {readerExpanded ? (
+                        <Minimize2 className="h-3.5 w-3.5" />
+                      ) : (
+                        <Maximize2 className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => void handleToggleSave(activeItem)}
+                      className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors hover:bg-white/[0.06]"
+                      style={{
+                        color: activeItem.saved
+                          ? 'var(--color-accent-mid)'
+                          : 'var(--color-text-tertiary)',
+                      }}
+                      aria-label={activeItem.saved ? 'Unsave' : 'Save'}
+                    >
+                      {activeItem.saved ? (
+                        <BookmarkCheck className="h-4 w-4" />
+                      ) : (
+                        <Bookmark className="h-4 w-4" />
+                      )}
+                    </button>
+                    <a
+                      href={activeItem.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors hover:bg-white/[0.06]"
+                      style={{ color: 'var(--color-text-tertiary)' }}
+                      aria-label="Open in browser"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                    </a>
+                  </div>
+                </div>
+
+                {/* Scrollable body */}
+                <div className="flex-1 overflow-y-auto" onScroll={handleReaderScroll}>
+                  {/* Hero media */}
+                  {activeItem.videoUrl ? (
+                    (() => {
+                      const isYoutube = /youtu\.?be/.test(activeItem.videoUrl)
+                      const embedUrl = isYoutube
+                        ? activeItem.videoUrl
+                            .replace('watch?v=', 'embed/')
+                            .replace('youtu.be/', 'www.youtube.com/embed/')
+                        : null
+                      return (
+                        <div className="w-full aspect-video bg-black">
+                          {embedUrl ? (
+                            <iframe
+                              src={embedUrl}
+                              className="w-full h-full"
+                              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                              allowFullScreen
+                              sandbox="allow-scripts allow-same-origin allow-presentation"
+                            />
+                          ) : (
+                            <video
+                              src={activeItem.videoUrl}
+                              controls
+                              className="w-full h-full object-contain"
+                              preload="metadata"
+                            />
+                          )}
+                        </div>
+                      )
+                    })()
+                  ) : activeItem.imageUrl ? (
+                    <div className="relative w-full overflow-hidden" style={{ maxHeight: 240 }}>
+                      <img
+                        src={activeItem.imageUrl}
+                        alt=""
+                        className="w-full object-cover"
+                        loading="lazy"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-[rgba(12,12,18,0.7)] to-transparent pointer-events-none" />
+                    </div>
+                  ) : null}
+
+                  <div className="px-6 pt-5 pb-8 space-y-5">
+                    {/* Title */}
+                    <h2
+                      className="text-base font-semibold leading-snug"
+                      style={{ color: 'var(--color-text-primary)' }}
+                    >
+                      {activeItem.title}
+                    </h2>
+
+                    {/* Author */}
+                    {activeItem.author && (
+                      <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+                        By {activeItem.author}
+                      </p>
+                    )}
+
+                    {/* Categories */}
+                    {activeItem.categories && activeItem.categories.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {activeItem.categories.map((cat) => (
+                          <span
+                            key={cat}
+                            className="text-[10px] px-2 py-0.5 rounded-full"
+                            style={{
+                              background: 'rgba(255,255,255,0.04)',
+                              border: '1px solid rgba(255,255,255,0.08)',
+                              color: 'var(--color-text-tertiary)',
+                            }}
+                          >
+                            {cat}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Summary block */}
+                    {activeItem.summary ? (
+                      <div
+                        className="rounded-xl p-4 space-y-2"
+                        style={{
+                          background: 'rgba(255,255,255,0.025)',
+                          border: '1px solid var(--color-border-hairline)',
+                        }}
+                      >
+                        <p
+                          className="text-[10px] font-semibold uppercase tracking-wider"
+                          style={{ color: 'var(--color-text-tertiary)' }}
+                        >
+                          Summary
+                        </p>
+                        <div
+                          style={{
+                            color: 'var(--color-text-secondary)',
+                            fontSize: 13,
+                            lineHeight: 1.7,
+                          }}
+                        >
+                          {renderMarkdown(activeItem.summary)}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs italic" style={{ color: 'var(--color-text-tertiary)' }}>
+                        No summary available — Ollama may be offline.
+                      </p>
+                    )}
+
+                    {/* AI Analysis block */}
+                    {activeItem.analysis && (
+                      <div
+                        className="rounded-xl p-4 space-y-2"
+                        style={{
+                          background: 'rgba(52,211,153,0.04)',
+                          border: '1px solid rgba(52,211,153,0.18)',
+                        }}
+                      >
+                        <p
+                          className="text-[10px] font-semibold uppercase tracking-wider"
+                          style={{ color: 'var(--color-state-success)' }}
+                        >
+                          AI Analysis · not established fact
+                        </p>
+                        <div
+                          style={{
+                            color: 'var(--color-text-secondary)',
+                            fontSize: 13,
+                            lineHeight: 1.7,
+                          }}
+                        >
+                          {renderMarkdown(activeItem.analysis)}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Full article content (fetched from source) */}
+                    {activeItem.fullContent && (
+                      <div className="space-y-2">
+                        <div
+                          style={{
+                            borderTop: '1px solid var(--color-border-hairline)',
+                            paddingTop: 16,
+                          }}
+                        >
+                          <p
+                            className="text-[10px] font-semibold uppercase tracking-wider"
+                            style={{ color: 'var(--color-text-tertiary)' }}
+                          >
+                            Full Article
+                          </p>
+                        </div>
+                        <FullArticleRenderer html={activeItem.fullContent} />
+                      </div>
+                    )}
+
+                    {/* RSS Excerpt (always shown; labeled contextually) */}
+                    {activeItem.rawText && (
+                      <div className="space-y-2">
+                        <div
+                          className="flex items-center gap-2"
+                          style={{
+                            borderTop: '1px solid var(--color-border-hairline)',
+                            paddingTop: 16,
+                          }}
+                        >
+                          <p
+                            className="text-[10px] font-semibold uppercase tracking-wider"
+                            style={{ color: 'var(--color-text-tertiary)' }}
+                          >
+                            {activeItem.fullContent ? 'RSS Excerpt' : 'Article'}
+                          </p>
+                        </div>
+                        <div
+                          className="leading-relaxed"
+                          style={{
+                            color: 'var(--color-text-secondary)',
+                            fontSize: 13,
+                            lineHeight: 1.75,
+                          }}
+                        >
+                          {renderMarkdown(activeItem.rawText)}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Open in browser CTA */}
+                    <a
+                      href={activeItem.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-2 w-full justify-center rounded-xl py-2.5 text-xs font-medium transition-all"
+                      style={{
+                        background: 'rgba(139,92,246,0.10)',
+                        border: '1px solid rgba(139,92,246,0.22)',
+                        color: 'var(--color-accent-mid)',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = 'rgba(139,92,246,0.18)'
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'rgba(139,92,246,0.10)'
+                      }}
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      Open full article in browser
+                    </a>
+                  </div>
+                </div>
+              </motion.aside>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* Topic management bar */}
+        {activeTopic && (
+          <div
+            className="flex items-center justify-between px-6 py-2 shrink-0"
+            style={{
+              borderTop: '1px solid var(--color-border-hairline)',
+              background: 'rgba(14,14,20,0.60)',
+            }}
+          >
             <button
-              onClick={() => void handleCreateTopic()}
-              disabled={!newTopicName.trim()}
-              className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-violet-500 disabled:opacity-40"
+              onClick={() => void handleToggleAnalysis(activeTopic)}
+              className="flex items-center gap-1.5 text-[11px] transition-colors"
+              style={{ color: 'var(--color-text-tertiary)', cursor: 'default' }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = 'var(--color-text-secondary)'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = 'var(--color-text-tertiary)'
+              }}
             >
-              Add
+              <FlaskConical className="h-3 w-3" />
+              {activeTopic.analysisOptIn ? 'Disable AI analysis' : 'Enable AI analysis'} for{' '}
+              {activeTopic.name}
             </button>
             <button
-              onClick={() => {
-                setAddingTopic(false)
-                setNewTopicName('')
+              onClick={() => void handleDeleteTopic(activeTopic)}
+              className="flex items-center gap-1 text-[11px] transition-colors"
+              style={{ color: 'var(--color-state-danger)', opacity: 0.6, cursor: 'default' }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.opacity = '1'
               }}
-              className="rounded-lg px-2 py-1.5 text-xs text-[#6F6F80] transition hover:text-[#F4F4F8]"
+              onMouseLeave={(e) => {
+                e.currentTarget.style.opacity = '0.6'
+              }}
             >
-              Cancel
+              <Trash2 className="h-3 w-3" /> Remove topic
             </button>
           </div>
         )}
       </div>
-
-      {/* Main content — clusters feed on left + article reader on right */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Cluster + article list (scrollable) */}
-        <div className="flex-1 overflow-y-auto p-6">
-          <div className="flex flex-col gap-3 max-w-[720px] mx-auto">
-            {clusters.length === 0 && rawItems.length > 0 ? (
-              // Items fetched but not yet clustered — show them in a media-rich grid
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {rawItems.map((item) => (
-                  <NewsItemCard
-                    key={item.id}
-                    item={item}
-                    onSelect={(i) => setActiveItem(activeItem?.id === i.id ? null : i)}
-                    onToggleSave={handleToggleSave}
-                    onMarkRead={handleMarkRead}
-                  />
-                ))}
-              </div>
-            ) : clusters.length === 0 ? (
-              <div className="flex h-full items-center justify-center py-20">
-                <div className="text-center">
-                  <Newspaper
-                    size={28}
-                    className="mx-auto mb-3"
-                    style={{ color: 'var(--color-text-tertiary)' }}
-                  />
-                  <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
-                    No stories yet. Refresh feeds to load news.
-                  </p>
-                </div>
-              </div>
-            ) : (
-              clusters.map((c) => (
-                <div key={c.id}>
-                  {/* Cluster header */}
-                  <button
-                    onClick={() => setActiveCluster(activeCluster?.id === c.id ? null : c)}
-                    className="w-full text-left transition-all"
-                    style={{
-                      padding: '14px 16px',
-                      borderRadius: 14,
-                      border: `1px solid ${activeCluster?.id === c.id ? 'var(--color-border-accent)' : 'var(--color-border-hairline)'}`,
-                      background:
-                        activeCluster?.id === c.id
-                          ? 'rgba(139,92,246,0.08)'
-                          : 'rgba(20,20,28,0.80)',
-                      backdropFilter: 'blur(8px)',
-                      WebkitBackdropFilter: 'blur(8px)',
-                      cursor: 'default',
-                      display: 'flex',
-                      gap: 12,
-                    }}
-                    onMouseEnter={(e) => {
-                      if (activeCluster?.id !== c.id)
-                        e.currentTarget.style.borderColor = 'var(--color-border-subtle)'
-                    }}
-                    onMouseLeave={(e) => {
-                      if (activeCluster?.id !== c.id)
-                        e.currentTarget.style.borderColor = 'var(--color-border-hairline)'
-                    }}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p
-                        className="text-sm font-medium leading-snug mb-1.5"
-                        style={{ color: 'var(--color-text-primary)' }}
-                      >
-                        {c.summary}
-                      </p>
-                      <div className="flex items-center gap-2">
-                        <Layers
-                          className="h-3 w-3"
-                          style={{ color: 'var(--color-text-tertiary)' }}
-                        />
-                        <span
-                          className="text-[11px]"
-                          style={{ color: 'var(--color-text-tertiary)' }}
-                        >
-                          {c.itemCount} articles · {timeAgo(c.createdAt)}
-                        </span>
-                      </div>
-                    </div>
-                    <ChevronRight
-                      className={`h-4 w-4 shrink-0 transition-transform ${activeCluster?.id === c.id ? 'rotate-90' : ''}`}
-                      style={{ color: 'var(--color-text-tertiary)', marginTop: 2 }}
-                    />
-                  </button>
-
-                  {/* Articles for this cluster */}
-                  <AnimatePresence>
-                    {activeCluster?.id === c.id && (
-                      <motion.div
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: 'auto' }}
-                        exit={{ opacity: 0, height: 0 }}
-                        transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
-                        className="overflow-hidden"
-                      >
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2 pl-4">
-                          {items.map((item) => (
-                            <NewsItemCard
-                              key={item.id}
-                              item={item}
-                              onSelect={(i) => setActiveItem(activeItem?.id === i.id ? null : i)}
-                              onToggleSave={handleToggleSave}
-                              onMarkRead={handleMarkRead}
-                            />
-                          ))}
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Article reader panel */}
-        <AnimatePresence>
-          {activeItem && (
-            <motion.aside
-              initial={{ opacity: 0, x: 16 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 16 }}
-              transition={{ duration: 0.22, ease: [0, 0, 0.2, 1] }}
-              className="w-80 shrink-0 overflow-y-auto p-5"
-              style={{
-                borderLeft: '1px solid var(--color-border-hairline)',
-                background: 'rgba(14,14,20,0.85)',
-                backdropFilter: 'blur(16px)',
-                WebkitBackdropFilter: 'blur(16px)',
-              }}
-            >
-              {/* Hero image */}
-              {activeItem.imageUrl && (
-                <div className="relative -mx-5 -mt-5 mb-4 overflow-hidden" style={{ height: 160 }}>
-                  <img
-                    src={activeItem.imageUrl}
-                    alt=""
-                    className="w-full h-full object-cover"
-                    loading="lazy"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent pointer-events-none" />
-                </div>
-              )}
-
-              <div className="flex items-start justify-between gap-2 mb-4">
-                <p
-                  className="flex-1 text-sm font-semibold leading-snug"
-                  style={{ color: 'var(--color-text-primary)' }}
-                >
-                  {activeItem.title}
-                </p>
-                <button
-                  onClick={() => void handleToggleSave(activeItem)}
-                  className="shrink-0 flex items-center justify-center w-7 h-7 rounded-lg transition-colors"
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    cursor: 'default',
-                    color: activeItem.saved
-                      ? 'var(--color-accent-mid)'
-                      : 'var(--color-text-tertiary)',
-                  }}
-                  aria-label={activeItem.saved ? 'Unsave' : 'Save'}
-                >
-                  {activeItem.saved ? (
-                    <BookmarkCheck className="h-4 w-4" />
-                  ) : (
-                    <Bookmark className="h-4 w-4" />
-                  )}
-                </button>
-              </div>
-
-              {/* Metadata strip */}
-              <div
-                className="flex items-center gap-2 mb-3 text-[10px]"
-                style={{ color: 'var(--color-text-tertiary)' }}
-              >
-                {activeItem.author && (
-                  <span className="truncate max-w-[120px]">{activeItem.author}</span>
-                )}
-                {activeItem.author && <span>·</span>}
-                <span>
-                  {activeItem.publishedAt
-                    ? new Date(activeItem.publishedAt).toLocaleDateString()
-                    : 'Unknown date'}
-                </span>
-                {activeItem.readingTimeMin && (
-                  <>
-                    <span>·</span>
-                    <span className="flex items-center gap-0.5">
-                      <Clock className="h-2.5 w-2.5" />
-                      {activeItem.readingTimeMin}m
-                    </span>
-                  </>
-                )}
-              </div>
-
-              {activeItem.summary ? (
-                <div
-                  className="mb-4 text-xs leading-relaxed"
-                  style={{
-                    padding: '12px 14px',
-                    borderRadius: 10,
-                    background: 'rgba(255,255,255,0.03)',
-                    border: '1px solid var(--color-border-hairline)',
-                    color: 'var(--color-text-secondary)',
-                  }}
-                >
-                  <p
-                    className="text-[10px] font-semibold uppercase mb-1.5"
-                    style={{ color: 'var(--color-text-tertiary)', letterSpacing: '0.06em' }}
-                  >
-                    Summary
-                  </p>
-                  {activeItem.summary}
-                </div>
-              ) : (
-                <p className="mb-4 text-xs italic" style={{ color: 'var(--color-text-tertiary)' }}>
-                  No summary — Ollama may be offline.
-                </p>
-              )}
-
-              {activeItem.analysis && (
-                <div
-                  className="mb-4 text-xs leading-relaxed"
-                  style={{
-                    padding: '12px 14px',
-                    borderRadius: 10,
-                    border: '1px solid rgba(52,211,153,0.20)',
-                    background: 'rgba(52,211,153,0.05)',
-                    color: 'var(--color-text-secondary)',
-                  }}
-                >
-                  <p
-                    className="text-[10px] font-semibold uppercase mb-1.5"
-                    style={{ color: 'var(--color-state-success)', letterSpacing: '0.06em' }}
-                  >
-                    AI Analysis · not established fact
-                  </p>
-                  {activeItem.analysis}
-                </div>
-              )}
-
-              <a
-                href={activeItem.url}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center gap-1.5 text-xs transition-colors"
-                style={{ color: 'var(--color-accent-mid)' }}
-              >
-                <ExternalLink className="h-3.5 w-3.5" />
-                Read full article
-              </a>
-            </motion.aside>
-          )}
-        </AnimatePresence>
-      </div>
-
-      {/* Topic management bar (when a topic is selected) */}
-      {activeTopic && (
-        <div
-          className="flex items-center justify-between px-6 py-2 shrink-0"
-          style={{
-            borderTop: '1px solid var(--color-border-hairline)',
-            background: 'rgba(14,14,20,0.60)',
-          }}
-        >
-          <button
-            onClick={() => void handleToggleAnalysis(activeTopic)}
-            className="flex items-center gap-1.5 text-[11px] transition-colors"
-            style={{ color: 'var(--color-text-tertiary)', cursor: 'default' }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = 'var(--color-text-secondary)'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = 'var(--color-text-tertiary)'
-            }}
-          >
-            <FlaskConical className="h-3 w-3" />
-            {activeTopic.analysisOptIn ? 'Disable AI analysis' : 'Enable AI analysis'} for{' '}
-            {activeTopic.name}
-          </button>
-          <button
-            onClick={() => void handleDeleteTopic(activeTopic)}
-            className="flex items-center gap-1 text-[11px] transition-colors"
-            style={{ color: 'var(--color-state-danger)', opacity: 0.6, cursor: 'default' }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.opacity = '1'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.opacity = '0.6'
-            }}
-          >
-            <Trash2 className="h-3 w-3" /> Remove topic
-          </button>
-        </div>
-      )}
-    </div>
+    </ScreenShell>
   )
 }

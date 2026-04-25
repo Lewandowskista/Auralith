@@ -14,12 +14,13 @@ import {
   createCalendarEventsRepo,
   createAuditRepo,
 } from '@auralith/core-db'
-import { createNewsRepo } from '@auralith/core-news'
+import { createNewsRepo, runFullPipeline } from '@auralith/core-news'
 import {
   OllamaClient,
   OllamaStatusMonitor,
   initModelRouter,
-  type ModelConfig,
+  getModelRouter,
+  initAiQueue,
 } from '@auralith/core-ai'
 import { registerAssistantSpeakTool } from '@auralith/core-tools'
 import { SuggestionEngine } from '@auralith/core-suggest'
@@ -30,7 +31,11 @@ import { registerSettingsHandlers } from './ipc/handlers/settings.handler'
 import { openSpotlightWindow, registerSystemHandlers } from './ipc/handlers/system.handler'
 import { registerPaletteHandlers } from './ipc/handlers/palette.handler'
 import { registerBrainHandlers, initBrainDeps } from './ipc/handlers/brain.handler'
-import { registerAssistantHandlers, initAssistantDeps } from './ipc/handlers/assistant.handler'
+import {
+  registerAssistantHandlers,
+  initAssistantDeps,
+  sendVoiceMessage,
+} from './ipc/handlers/assistant.handler'
 import { registerActivityHandlers, initActivityDeps } from './ipc/handlers/activity.handler'
 import { registerNewsHandlers, initNewsDeps } from './ipc/handlers/news.handler'
 import { registerWeatherHandlers, initWeatherDeps } from './ipc/handlers/weather.handler'
@@ -51,6 +56,7 @@ import { registerOllamaHandlers } from './ipc/handlers/ollama.handler'
 import { registerClipboardHandlers, initClipboardDeps } from './ipc/handlers/clipboard.handler'
 import { registerAppUsageHandlers, initAppUsageDeps } from './ipc/handlers/app-usage.handler'
 import { initBriefingDeps, setupBriefingScheduler } from './briefing/briefing-job'
+import { registerBriefingHandlers } from './ipc/handlers/briefing.handler'
 import {
   CalendarIcsImporter,
   IdleTracker,
@@ -71,6 +77,7 @@ import { registerAgentHandlers, initAgentDeps } from './ipc/handlers/agent.handl
 import { registerGraphHandlers, initGraphDeps } from './ipc/handlers/graph.handler'
 import { setupConfirmationChannel, makeExecutorDeps } from './tools/confirmation'
 import { FileWatcher } from './watcher/file-watcher'
+import { initAppContextBroker } from './ai/app-context-setup'
 import { SessionJob } from './watcher/session-job'
 import { RetentionJob } from './watcher/retention-job'
 
@@ -89,6 +96,7 @@ const isDev = !isE2E && (process.env['NODE_ENV'] === 'development' || !app.isPac
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
+let trayInterval: ReturnType<typeof setInterval> | null = null
 
 function createWindow(titlebarBg = '#07070B'): void {
   mainWindow = new BrowserWindow({
@@ -146,7 +154,13 @@ function createTray(getOpenSuggestions: () => Array<{ id: string; title: string 
       {
         label: 'Open spotlight...',
         click: () => {
-          openSpotlightWindow(isDev)
+          if (mainWindow) {
+            mainWindow.show()
+            mainWindow.focus()
+            mainWindow.webContents.send('global-shortcut', { id: 'spotlight.open' })
+          } else {
+            openSpotlightWindow(isDev)
+          }
         },
       },
       {
@@ -192,7 +206,7 @@ function createTray(getOpenSuggestions: () => Array<{ id: string; title: string 
   }
 
   rebuildMenu()
-  setInterval(rebuildMenu, 60_000)
+  trayInterval = setInterval(rebuildMenu, 60_000)
 
   tray.on('click', () => {
     if (mainWindow?.isVisible()) {
@@ -214,7 +228,13 @@ function registerGlobalShortcuts(): void {
     mainWindow?.webContents.send('global-shortcut', { id: 'capture.open' })
   })
   globalShortcut.register('CommandOrControl+Shift+A', () => {
-    openSpotlightWindow(isDev)
+    if (mainWindow) {
+      mainWindow.show()
+      mainWindow.focus()
+      mainWindow.webContents.send('global-shortcut', { id: 'spotlight.open' })
+    } else {
+      openSpotlightWindow(isDev)
+    }
   })
 }
 
@@ -235,30 +255,17 @@ app.whenReady().then(() => {
   }
 
   const baseUrl = settings.get('ollama.url', z.string()) ?? 'http://localhost:11434'
-  const embedModel = settings.get('ollama.embedModel', z.string()) ?? 'nomic-embed-text'
-  const chatModel = settings.get('ollama.chatModel', z.string()) ?? 'phi4-mini:3.8b'
 
   const ollamaClient = new OllamaClient({ baseUrl })
 
-  // Initialize per-task model router with any persisted per-role overrides
-  {
-    const pick = (key: string, fallback?: string): string | undefined =>
-      settings.get(`ollama.modelRouting.${key}`, z.string()) ?? fallback
-    const ro: Partial<ModelConfig> = {}
-    const c = pick('classifier', settings.get('ollama.classifierModel', z.string()) ?? undefined)
-    if (c) ro.classifier = c
-    const ch = pick('chat', chatModel)
-    if (ch) ro.chat = ch
-    const su = pick('summarize')
-    if (su) ro.summarize = su
-    const ex = pick('extract')
-    if (ex) ro.extract = ex
-    const ag = pick('agent', chatModel)
-    if (ag) ro.agent = ag
-    const em = pick('embed', embedModel)
-    if (em) ro.embed = em
-    initModelRouter(ollamaClient, ro)
-  }
+  // Model roles are hardcoded — no per-role overrides from settings.
+  // Role → model assignments live in packages/core-ai/src/router.ts (balanced preset).
+  initModelRouter(ollamaClient)
+
+  // Single shared AI queue — one foreground + one background slot.
+  // Background slots pause while the user is actively chatting (foreground).
+  // Conservative for 8 GB VRAM: only one large model active at a time.
+  const aiQueue = initAiQueue({ foregroundConcurrency: 1, backgroundConcurrency: 1 })
 
   const statusMonitor = new OllamaStatusMonitor(ollamaClient)
   statusMonitor.start(30_000)
@@ -294,29 +301,56 @@ app.whenReady().then(() => {
   const auditRepo = createAuditRepo(bundle.db)
   const executorDeps = makeExecutorDeps(auditRepo)
 
-  initBrainDeps({ bundle, sqlite, embedClient: ollamaClient, embedModel })
+  // All feature deps read resolved model names from the router — the single
+  // source of truth for which model serves each role.
+  const router = getModelRouter()
+  const resolvedChatModel = router.modelFor('chat')
+  const resolvedAgentModel = router.modelFor('agent')
+  const resolvedEmbedModel = router.modelFor('embed')
+  const resolvedClassifierModel = router.modelFor('classifier')
+  const resolvedSummarizeModel = router.modelFor('summarize')
+  const resolvedExtractModel = router.modelFor('extract')
+
+  initBrainDeps({ bundle, sqlite, embedClient: ollamaClient, embedModel: resolvedEmbedModel })
   initAssistantDeps({
     bundle,
     sqlite,
     chatClient: ollamaClient,
-    chatModel,
+    chatModel: resolvedChatModel,
     embedClient: ollamaClient,
-    embedModel,
+    embedModel: resolvedEmbedModel,
     executorDeps,
   })
+  // Initialize the app-aware context broker — injects weather, news, activity, etc. into prompts
+  initAppContextBroker({
+    bundle,
+    sqlite,
+    embedClient: ollamaClient,
+    embedModel: resolvedEmbedModel,
+  })
   initActivityDeps({ bundle, watcher: fileWatcher })
-  initNewsDeps({ bundle, ollamaClient, classifierModel: embedModel })
+  initNewsDeps({
+    bundle,
+    ollamaClient,
+    classifierModel: resolvedClassifierModel,
+    summarizeModel: resolvedSummarizeModel,
+    extractModel: resolvedExtractModel,
+  })
   initWeatherDeps(bundle)
-  initBriefingDeps({ bundle, ollamaClient, classifierModel: embedModel })
+  initBriefingDeps({
+    bundle,
+    ollamaClient,
+    classifierModel: resolvedClassifierModel,
+    summarizeModel: resolvedSummarizeModel,
+  })
   initSuggestDeps(bundle)
 
   const voiceOrchestrator = new VoiceOrchestrator({
     settingsRepo: settings,
     sqlite,
     sendToAssistant: async (text) => {
-      const win = BrowserWindow.getAllWindows()[0]
-      win?.webContents.send('voice:assistant-message', { text })
-      return { messageId: '' }
+      const win = BrowserWindow.getAllWindows()[0] ?? null
+      return sendVoiceMessage(text, win)
     },
     broadcast: (channel, data) => {
       const win = BrowserWindow.getAllWindows()[0]
@@ -333,14 +367,14 @@ app.whenReady().then(() => {
     bundle,
     sqlite,
     embedClient: ollamaClient,
-    embedModel,
+    embedModel: resolvedEmbedModel,
     getDownloadsPath: () => app.getPath('downloads'),
     getNotesDir: () => notesDir,
     eventsRepo: () => createEventsRepo(bundle.db),
     extraSandboxRoots,
   })
 
-  initClipperProtocol({ bundle, sqlite, embedClient: ollamaClient, embedModel })
+  initClipperProtocol({ bundle, sqlite, embedClient: ollamaClient, embedModel: resolvedEmbedModel })
 
   const voiceEnabled = settings.get('voice.enabled', z.boolean()) ?? false
   if (voiceEnabled) {
@@ -432,12 +466,45 @@ app.whenReady().then(() => {
   registerOllamaHandlers(bundle)
   initIngestDeps({ bundle, sqlite })
   registerIngestHandlers()
-  initAgentDeps({ bundle, sqlite, chatClient: ollamaClient, chatModel, executorDeps })
+  initAgentDeps({
+    bundle,
+    sqlite,
+    chatClient: ollamaClient,
+    chatModel: resolvedAgentModel,
+    executorDeps,
+  })
   registerAgentHandlers()
   initGraphDeps({ bundle, sqlite })
   registerGraphHandlers()
   registerStubHandlers()
+  registerBriefingHandlers()
   setupBriefingScheduler()
+
+  // Background news refresh every 3 hours (quiet hours: before 6am or after 11pm).
+  // Queued as a background task so it does not compete with foreground chat/agent calls.
+  setInterval(
+    () => {
+      const hour = new Date().getHours()
+      if (hour < 6 || hour >= 23) return
+      void aiQueue
+        .enqueueBackgroundAiTask(async () => {
+          const newsRepo = createNewsRepo(bundle.db)
+          await runFullPipeline({
+            repo: newsRepo,
+            ollamaClient,
+            classifierModel: resolvedClassifierModel,
+            summarizeModel: resolvedSummarizeModel,
+            extractModel: resolvedExtractModel,
+          })
+          for (const win of BrowserWindow.getAllWindows()) {
+            if (!win.isDestroyed())
+              win.webContents.send('news:fetch-complete', { clustersUpdated: true })
+          }
+        })
+        .catch((err: unknown) => console.error('[news] bg-refresh error:', err))
+    },
+    3 * 60 * 60 * 1000,
+  )
 
   const suggestionEngine = new SuggestionEngine(bundle)
   const signalProviders = {
@@ -476,6 +543,7 @@ app.whenReady().then(() => {
   })
 
   app.on('will-quit', () => {
+    if (trayInterval) clearInterval(trayInterval)
     fileWatcher.stop()
     sessionJob.stop()
     retentionJob.stop()
