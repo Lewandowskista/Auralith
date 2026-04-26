@@ -1,4 +1,4 @@
-import { desc, eq, and, lt } from 'drizzle-orm'
+import { desc, eq, and, lt, isNotNull } from 'drizzle-orm'
 import { randomUUID } from 'crypto'
 import type { DbClient } from '../client'
 import { suggestions } from '../schema/system'
@@ -131,31 +131,18 @@ export function createSuggestionsRepo(db: DbClient) {
 
   function expireStale(): number {
     const now = new Date()
-    // Expire open suggestions whose expiresAt has passed
-    const stale = db
-      .select()
-      .from(suggestions)
-      .where(and(eq(suggestions.status, 'open'), lt(suggestions.expiresAt, now)))
-      .all()
-    for (const row of stale) {
-      db.update(suggestions)
-        .set({ status: 'expired', decidedAt: now })
-        .where(eq(suggestions.id, row.id))
-        .run()
-    }
-    // Wake snoozed suggestions whose snooze has expired
-    const waking = db
-      .select()
-      .from(suggestions)
-      .where(and(eq(suggestions.status, 'snoozed'), lt(suggestions.expiresAt, now)))
-      .all()
-    for (const row of waking) {
-      db.update(suggestions)
-        .set({ status: 'open', decidedAt: null, expiresAt: null })
-        .where(eq(suggestions.id, row.id))
-        .run()
-    }
-    return stale.length
+    // Single bulk UPDATE for open suggestions whose expiresAt has passed
+    const expireResult = db
+      .update(suggestions)
+      .set({ status: 'expired', decidedAt: now })
+      .where(and(eq(suggestions.status, 'open'), isNotNull(suggestions.expiresAt), lt(suggestions.expiresAt, now)))
+      .run()
+    // Single bulk UPDATE to wake snoozed suggestions whose snooze has expired
+    db.update(suggestions)
+      .set({ status: 'open', decidedAt: null, expiresAt: null })
+      .where(and(eq(suggestions.status, 'snoozed'), isNotNull(suggestions.expiresAt), lt(suggestions.expiresAt, now)))
+      .run()
+    return expireResult.changes
   }
 
   return {

@@ -2,6 +2,8 @@ import { randomUUID } from 'crypto'
 import { z } from 'zod'
 import type { OllamaClient } from './client'
 import type { ToolManifestEntry } from './turn-runner'
+import { formatToon } from './prompt-format'
+import { resolveModelConfig } from './model-resolver'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -37,6 +39,8 @@ export type AgentRunState = {
 export type AgentLoopDeps = {
   chatClient: OllamaClient
   chatModel: string
+  /** AI role used to resolve the correct num_ctx. Defaults to 'agent'. */
+  chatRole?: string
   tools: ToolManifestEntry[]
   /** Max total steps across all planning iterations */
   maxSteps?: number
@@ -60,39 +64,61 @@ export type AgentLoopDeps = {
 
 const PLAN_STEP_LIMIT = 15
 
-// ── Planning prompt ───────────────────────────────────────────────────────────
+// ── Planner ───────────────────────────────────────────────────────────────────
 
-function buildPlannerPrompt(goal: string, tools: ToolManifestEntry[]): string {
-  const toolList = tools.map((t) => `- ${t.id} (${t.tier}): ${t.description}`).join('\n')
+const PLANNER_SYSTEM = `You are an autonomous AI agent planner. Given a goal and a list of available tools, produce a JSON plan.
+Output ONLY a JSON object — no prose, no markdown, no code fences.
+Format: {"goal":"...","reasoning":"...","steps":[{"toolId":"...","params":{...},"description":"..."}]}`
 
-  return `You are an autonomous AI agent planner. Given a goal, produce a JSON plan listing the steps needed to accomplish it.
+function buildPlannerUserMessage(goal: string, tools: ToolManifestEntry[]): string {
+  // TOON-like compact record table — saves tokens vs prose list for large tool catalogs.
+  // Output must remain strict JSON; TOON is only for this input context.
+  const toolTable = formatToon(
+    tools.map((t) => ({ id: t.id, tier: t.tier, description: t.description })),
+    ['id', 'tier', 'description'],
+    'tools',
+  )
+  return `Goal: ${goal}
 
-Available tools:
-${toolList}
+Available tools (use ONLY these IDs — max ${PLAN_STEP_LIMIT} steps):
+${toolTable}
 
-Rules:
-- Max ${PLAN_STEP_LIMIT} steps
-- Only use tool IDs listed above
-- Each step must have: toolId (string), params (object), description (string)
-- Output ONLY a JSON object, no prose
-
-Output format:
-{"goal":"<goal>","reasoning":"<why these steps>","steps":[{"toolId":"...","params":{...},"description":"..."}]}`
+Produce the JSON plan now.`
 }
 
-function buildReflectionPrompt(
+// ── Reflector ─────────────────────────────────────────────────────────────────
+
+const REFLECTOR_SYSTEM = `You are an autonomous AI agent reflecting on task progress.
+Output ONLY a JSON object — no prose, no markdown, no code fences.
+Format: {"decision":"continue"|"done","answer":"<final answer if done, else omit>","revisedRemainingSteps":null|[{"toolId":"...","params":{...},"description":"..."}]}`
+
+function buildReflectionUserMessage(
   goal: string,
   completedSteps: AgentStep[],
   remainingSteps: AgentStep[],
+  tools: ToolManifestEntry[],
 ): string {
+  // Truncate results to avoid context explosion on long runs
   const doneStr = completedSteps
     .map(
       (s, i) =>
-        `Step ${i + 1} (${s.toolId}): ${s.status} — ${s.status === 'done' ? JSON.stringify(s.result).slice(0, 200) : s.error}`,
+        `Step ${i + 1} [${s.toolId}]: ${s.status}${
+          s.status === 'done'
+            ? ` — ${JSON.stringify(s.result).slice(0, 120)}`
+            : s.error
+              ? ` — error: ${s.error.slice(0, 80)}`
+              : ''
+        }`,
     )
     .join('\n')
 
-  const remainStr = remainingSteps.map((s) => `- ${s.toolId}: ${s.description}`).join('\n')
+  const remainStr =
+    remainingSteps.length > 0
+      ? remainingSteps.map((s) => `- ${s.toolId}: ${s.description ?? ''}`).join('\n')
+      : '(none — all planned steps done)'
+
+  // Compact TOON id-only list for the reflector — just needs valid IDs, not full descriptions.
+  const toolIds = tools.map((t) => t.id).join(', ')
 
   return `Goal: ${goal}
 
@@ -100,23 +126,34 @@ Completed steps:
 ${doneStr || '(none)'}
 
 Remaining planned steps:
-${remainStr || '(none)'}
+${remainStr}
 
-Based on what has happened, should you continue with the remaining steps or are you done?
+Available tool IDs (only these are valid if you revise steps): ${toolIds}
 
-Reply with JSON only:
-{"decision":"continue"|"done","answer":"<final answer if done, else empty>","revisedRemainingSteps":<null or revised array with same format as before>}`
+Decide: are you done, or should you continue / revise the remaining steps?`
 }
 
-// ── JSON extraction helper ─────────────────────────────────────────────────────
+// ── JSON extraction ───────────────────────────────────────────────────────────
 
 function extractJson(text: string): unknown {
-  const match = text.match(/\{[\s\S]*\}/)
-  if (!match) throw new Error('No JSON object found in response')
-  return JSON.parse(match[0])
+  // Strip markdown code fences first
+  const cleaned = text
+    .replace(/^```(?:json)?\s*/im, '')
+    .replace(/\s*```\s*$/m, '')
+    .trim()
+
+  // Try direct parse first
+  try {
+    return JSON.parse(cleaned)
+  } catch {
+    // Fall back to first balanced JSON object in the text
+    const match = cleaned.match(/\{[\s\S]*\}/)
+    if (!match) throw new Error('No JSON object found in response')
+    return JSON.parse(match[0])
+  }
 }
 
-// ── Plan schema ───────────────────────────────────────────────────────────────
+// ── Schemas ───────────────────────────────────────────────────────────────────
 
 const PlanSchema = z.object({
   goal: z.string(),
@@ -173,6 +210,7 @@ export async function runAgentLoop(
   const maxSteps = deps.maxSteps ?? PLAN_STEP_LIMIT
   const timeoutMs = deps.timeoutMs ?? 3 * 60 * 1000
   const deadline = Date.now() + timeoutMs
+  const { num_ctx } = resolveModelConfig(deps.chatRole ?? 'agent', { model: deps.chatModel })
 
   const state: AgentRunState = {
     runId,
@@ -186,22 +224,28 @@ export async function runAgentLoop(
   deps.onStateUpdate({ ...state })
 
   // ── 1. Planning ──────────────────────────────────────────────────────────────
+  // Use generate (non-streaming) for structured JSON — streaming adds latency
+  // and doesn't help for small JSON payloads. The system message gives the model
+  // clear role context, which is important for smaller models (phi4-mini, qwen3).
   let planRaw: unknown
   try {
-    const plannerMsg = buildPlannerPrompt(goal, deps.tools)
-    let planText = ''
-    for await (const token of deps.chatClient.stream({
-      model: deps.chatModel,
-      messages: [{ role: 'user', content: plannerMsg }],
-      format: 'json',
-    })) {
-      planText += token
-      if (Date.now() > deadline || deps.isCancelled()) {
-        state.status = 'cancelled'
-        deps.onStateUpdate({ ...state })
-        return state
-      }
+    if (Date.now() > deadline || deps.isCancelled()) {
+      state.status = 'cancelled'
+      deps.onStateUpdate({ ...state })
+      return state
     }
+
+    const planText = await deps.chatClient.generate({
+      model: deps.chatModel,
+      messages: [
+        { role: 'system', content: PLANNER_SYSTEM },
+        { role: 'user', content: buildPlannerUserMessage(goal, deps.tools) },
+      ],
+      format: 'json',
+      maxTokens: 1024,
+      temperature: 0.1,
+      num_ctx,
+    })
     planRaw = extractJson(planText)
   } catch (err) {
     state.status = 'failed'
@@ -220,6 +264,16 @@ export async function runAgentLoop(
     return state
   }
 
+  // Validate that all planned tool IDs exist in the registered tool list
+  const knownToolIds = new Set(deps.tools.map((t) => t.id))
+  const unknownTools = parsed.steps.filter((s) => !knownToolIds.has(s.toolId))
+  if (unknownTools.length > 0) {
+    state.status = 'failed'
+    state.error = `Plan references unknown tools: ${unknownTools.map((s) => s.toolId).join(', ')}`
+    deps.onStateUpdate({ ...state })
+    return state
+  }
+
   const plan: AgentPlan = {
     goal: parsed.goal,
     steps: parsed.steps.map(makeStep),
@@ -232,7 +286,7 @@ export async function runAgentLoop(
 
   // ── 2. Execution loop ────────────────────────────────────────────────────────
   let totalStepsRun = 0
-  const REFLECT_EVERY = 3
+  let lastStepFailed = false
 
   while (state.currentStepIndex < plan.steps.length && totalStepsRun < maxSteps) {
     if (Date.now() > deadline) {
@@ -266,17 +320,22 @@ export async function runAgentLoop(
     } else if (toolResult.outcome === 'success') {
       step.status = 'done'
       step.result = toolResult.result
+      lastStepFailed = false
     } else {
       step.status = 'failed'
       step.error = toolResult.error ?? 'tool failed'
+      lastStepFailed = true
     }
 
     state.currentStepIndex++
     deps.onStateUpdate({ ...state })
 
     // ── 3. Reflection checkpoint ───────────────────────────────────────────────
+    // Reflect only when: a step failed, at every 5th step from step 5, or at plan end.
+    // This avoids ~66% of reflection calls vs the old every-3 approach.
+    const atPlanEnd = state.currentStepIndex >= plan.steps.length
     const shouldReflect =
-      totalStepsRun % REFLECT_EVERY === 0 || state.currentStepIndex >= plan.steps.length
+      lastStepFailed || atPlanEnd || (totalStepsRun >= 5 && totalStepsRun % 5 === 0)
     if (shouldReflect) {
       state.status = 'reflecting'
       deps.onStateUpdate({ ...state })
@@ -285,15 +344,20 @@ export async function runAgentLoop(
       const remainingSteps = plan.steps.slice(state.currentStepIndex)
 
       try {
-        const reflectionMsg = buildReflectionPrompt(goal, completedSteps, remainingSteps)
-        let reflText = ''
-        for await (const token of deps.chatClient.stream({
+        const reflText = await deps.chatClient.generate({
           model: deps.chatModel,
-          messages: [{ role: 'user', content: reflectionMsg }],
+          messages: [
+            { role: 'system', content: REFLECTOR_SYSTEM },
+            {
+              role: 'user',
+              content: buildReflectionUserMessage(goal, completedSteps, remainingSteps, deps.tools),
+            },
+          ],
           format: 'json',
-        })) {
-          reflText += token
-        }
+          maxTokens: 512,
+          temperature: 0.1,
+          num_ctx,
+        })
 
         const reflRaw = extractJson(reflText)
         const refl = ReflectionSchema.parse(reflRaw)
@@ -305,14 +369,17 @@ export async function runAgentLoop(
           return state
         }
 
-        // Optionally revise remaining steps
+        // Optionally revise remaining steps; validate tool IDs before applying
         if (refl.revisedRemainingSteps) {
-          const newSteps = refl.revisedRemainingSteps.map(makeStep)
-          plan.steps.splice(
-            state.currentStepIndex,
-            plan.steps.length - state.currentStepIndex,
-            ...newSteps,
-          )
+          const badIds = refl.revisedRemainingSteps.filter((s) => !knownToolIds.has(s.toolId))
+          if (badIds.length === 0) {
+            const newSteps = refl.revisedRemainingSteps.map(makeStep)
+            plan.steps.splice(
+              state.currentStepIndex,
+              plan.steps.length - state.currentStepIndex,
+              ...newSteps,
+            )
+          }
         }
       } catch {
         // Reflection failed — continue with original plan
@@ -323,7 +390,7 @@ export async function runAgentLoop(
     }
   }
 
-  // All steps executed
+  // All steps executed without a done decision from the reflector
   state.status = 'completed'
   if (!state.finalAnswer) {
     const lastDone = plan.steps.filter((s) => s.status === 'done').at(-1)

@@ -1,6 +1,6 @@
 import type { DbClient } from '../client'
 import { events, sessions } from '../schema'
-import { eq, and, gte, lte, desc, count, isNull } from 'drizzle-orm'
+import { eq, and, gte, lte, desc, count, isNull, inArray } from 'drizzle-orm'
 import type { ActivityEvent } from '@auralith/core-events'
 
 export type EventRow = {
@@ -150,10 +150,19 @@ export function createEventsRepo(db: DbClient) {
       .offset(opts.offset ?? 0)
       .all()
 
-    return rows.map((r) => {
-      const [cnt] = db.select({ n: count() }).from(events).where(eq(events.sessionId, r.id)).all()
-      return toSessionRow(r, cnt?.n ?? 0)
-    })
+    if (rows.length === 0) return []
+
+    // Single query to count events per session instead of N individual count queries
+    const ids = rows.map((r) => r.id)
+    const countRows = db
+      .select({ sessionId: events.sessionId, n: count() })
+      .from(events)
+      .where(inArray(events.sessionId, ids))
+      .groupBy(events.sessionId)
+      .all()
+    const countMap = new Map(countRows.map((r) => [r.sessionId, r.n]))
+
+    return rows.map((r) => toSessionRow(r, countMap.get(r.id) ?? 0))
   }
 
   function countSessions(opts: ListSessionsOpts = {}): number {
@@ -204,10 +213,7 @@ export function createEventsRepo(db: DbClient) {
 
   function assignSessionBatch(eventIds: string[], sessionId: string): void {
     if (eventIds.length === 0) return
-    // Drizzle doesn't have IN update directly — use raw SQL
-    for (const id of eventIds) {
-      db.update(events).set({ sessionId }).where(eq(events.id, id)).run()
-    }
+    db.update(events).set({ sessionId }).where(inArray(events.id, eventIds)).run()
   }
 
   // Cleanup orphan sessions (ended > N days ago, or never ended but > 24h old)

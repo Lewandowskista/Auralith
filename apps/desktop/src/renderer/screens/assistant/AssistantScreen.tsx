@@ -64,22 +64,77 @@ const SUGGESTIONS = [
 
 function ThinkingDots(): ReactElement {
   return (
-    <span className="inline-flex items-center gap-[3px]" aria-label="Thinking">
+    <motion.span
+      className="inline-flex items-center gap-[5px]"
+      aria-label="Thinking"
+      initial="hidden"
+      animate="visible"
+      variants={{ visible: { transition: { staggerChildren: 0.18 } } }}
+    >
       {[0, 1, 2].map((i) => (
-        <span
+        <motion.span
           key={i}
           style={{
-            width: 5,
-            height: 5,
+            width: 6,
+            height: 6,
             borderRadius: '50%',
             background: 'var(--color-accent-mid)',
             display: 'inline-block',
-            animation: `thinking-dot 1.2s ease-in-out ${i * 0.2}s infinite`,
+          }}
+          variants={{
+            hidden: { opacity: 0.15, y: 0, scale: 0.8 },
+            visible: {
+              opacity: [0.15, 1, 0.15],
+              y: [0, -5, 0],
+              scale: [0.8, 1.15, 0.8],
+              transition: { duration: 1.1, repeat: Infinity, ease: 'easeInOut', delay: i * 0.18 },
+            },
           }}
         />
       ))}
+    </motion.span>
+  )
+}
+
+function StreamingMessage({ content }: { content: string }): ReactElement {
+  const parts = content.split(/(\s+)/)
+  return (
+    <span style={{ whiteSpace: 'pre-wrap' }}>
+      {parts.map((part, i) => (
+        <motion.span
+          key={i}
+          initial={{ opacity: 0, y: 3 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.12, ease: [0.2, 0.8, 0.2, 1] }}
+        >
+          {part}
+        </motion.span>
+      ))}
+      <span
+        className="ml-0.5 inline-block align-middle"
+        style={{
+          width: 2,
+          height: 14,
+          background: 'var(--color-accent-mid)',
+          animation: 'cursor-blink 0.9s ease-in-out infinite',
+          display: 'inline-block',
+        }}
+      />
     </span>
   )
+}
+
+function cleanAssistantContent(raw: string): string {
+  const trimmed = raw.trim()
+  if (trimmed.startsWith('{') && trimmed.includes('"speak"')) {
+    try {
+      const parsed = JSON.parse(trimmed) as Record<string, unknown>
+      if (typeof parsed['speak'] === 'string') return parsed['speak'] as string
+    } catch {
+      /* fall through */
+    }
+  }
+  return raw
 }
 
 export function AssistantScreen(): ReactElement {
@@ -95,7 +150,6 @@ export function AssistantScreen(): ReactElement {
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
-  const streamedLengthRef = useRef<Record<string, number>>({})
   const { status: ollamaStatus, retry: retryOllama } = useOllamaStatus()
 
   const loadThreads = useCallback(async (): Promise<Thread[]> => {
@@ -224,15 +278,6 @@ export function AssistantScreen(): ReactElement {
           message.id === messageId ? { ...message, content: message.content + token } : message,
         ),
       )
-      // Advance the settled boundary once per paint frame so bursts of chars
-      // land in one animated tail span, giving a word-at-a-time fade-in feel.
-      requestAnimationFrame(() => {
-        setMessages((prev) => {
-          const msg = prev.find((m) => m.id === messageId)
-          if (msg) streamedLengthRef.current[messageId] = msg.content.length
-          return prev
-        })
-      })
     })
     const unsubDone = window.auralith.on('assistant:done', (data) => {
       const { messageId, citations } = data as { messageId: string; citations: Citation[] }
@@ -241,7 +286,6 @@ export function AssistantScreen(): ReactElement {
           message.id === messageId ? { ...message, streaming: false, citations } : message,
         ),
       )
-      delete streamedLengthRef.current[messageId]
       setActiveMessageId(null)
       void loadThreads()
     })
@@ -460,13 +504,22 @@ export function AssistantScreen(): ReactElement {
               <p className="mt-1 text-xs">Your first message will create one automatically.</p>
             </div>
           ) : (
-            <div className="flex flex-col gap-2">
+            <motion.div
+              className="flex flex-col gap-2"
+              variants={{ visible: { transition: { staggerChildren: 0.04 } } }}
+              initial="hidden"
+              animate="visible"
+            >
               {threads.map((thread) => {
                 const active = activeThreadId === thread.id
                 const isDeleting = deletingThreadId === thread.id
                 return (
-                  <div
+                  <motion.div
                     key={thread.id}
+                    variants={{
+                      hidden: { opacity: 0, y: 5 },
+                      visible: { opacity: 1, y: 0, transition: { duration: 0.16 } },
+                    }}
                     className="group relative rounded-2xl transition"
                     style={{
                       border: active
@@ -567,17 +620,19 @@ export function AssistantScreen(): ReactElement {
                         )}
                       </>
                     )}
-                  </div>
+                  </motion.div>
                 )
               })}
-            </div>
+            </motion.div>
           )}
         </div>
       </aside>
 
       <div className="flex min-w-0 flex-1">
         <div className="relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden">
-          {ollamaStatus === 'offline' && <OllamaBanner onRetry={retryOllama} />}
+          <AnimatePresence>
+            {ollamaStatus === 'offline' && <OllamaBanner onRetry={retryOllama} />}
+          </AnimatePresence>
 
           <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-8 py-8">
             {messages.length === 0 ? (
@@ -695,80 +750,65 @@ export function AssistantScreen(): ReactElement {
                               message.content === '' ? (
                                 <ThinkingDots />
                               ) : (
-                                <>
-                                  <span style={{ whiteSpace: 'pre-wrap' }}>
-                                    {message.content.slice(
-                                      0,
-                                      streamedLengthRef.current[message.id] ?? 0,
-                                    )}
-                                  </span>
-                                  <span
-                                    key={message.content.length}
-                                    style={{
-                                      whiteSpace: 'pre-wrap',
-                                      animation: 'token-fade-in 0.12s ease-out',
-                                    }}
-                                  >
-                                    {message.content.slice(
-                                      streamedLengthRef.current[message.id] ?? 0,
-                                    )}
-                                  </span>
-                                  <span
-                                    className="ml-0.5 inline-block align-middle"
-                                    style={{
-                                      width: 2,
-                                      height: 14,
-                                      background: 'var(--color-accent-mid)',
-                                      animation: 'cursor-blink 0.9s ease-in-out infinite',
-                                      display: 'inline-block',
-                                    }}
-                                  />
-                                </>
+                                <StreamingMessage content={message.content} />
                               )
                             ) : (
-                              renderContent(message.content, message.citations)
+                              renderContent(
+                                cleanAssistantContent(message.content),
+                                message.citations,
+                              )
                             )}
                           </div>
-                          {message.citations &&
-                            message.citations.length > 0 &&
-                            !message.streaming && (
-                              <div
-                                className="mt-2 flex flex-wrap gap-1.5 pt-2"
-                                style={{ borderTop: '1px solid var(--color-border-hairline)' }}
-                              >
-                                {message.citations.map((citation) => (
-                                  <button
-                                    key={citation.chunkId}
-                                    onClick={() => openCitation(citation)}
-                                    className="flex items-center gap-1.5 text-[11px] transition-all"
-                                    style={{
-                                      padding: '4px 10px',
-                                      borderRadius: 8,
-                                      border: '1px solid var(--color-border-subtle)',
-                                      background: 'rgba(255,255,255,0.03)',
-                                      color: 'var(--color-text-secondary)',
-                                      cursor: 'default',
-                                    }}
-                                    onMouseEnter={(e) => {
-                                      e.currentTarget.style.background = 'rgba(255,255,255,0.06)'
-                                      e.currentTarget.style.color = 'var(--color-text-primary)'
-                                    }}
-                                    onMouseLeave={(e) => {
-                                      e.currentTarget.style.background = 'rgba(255,255,255,0.03)'
-                                      e.currentTarget.style.color = 'var(--color-text-secondary)'
-                                    }}
-                                  >
-                                    <BookOpen
-                                      className="h-3 w-3 shrink-0"
-                                      style={{ color: 'var(--color-accent-mid)' }}
-                                    />
-                                    <span className="max-w-[160px] truncate">
-                                      {citation.docTitle}
-                                    </span>
-                                  </button>
-                                ))}
-                              </div>
-                            )}
+                          <AnimatePresence>
+                            {message.citations &&
+                              message.citations.length > 0 &&
+                              !message.streaming && (
+                                <motion.div
+                                  initial={{ opacity: 0, y: 4 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
+                                  className="mt-2 flex flex-wrap gap-1.5 pt-2"
+                                  style={{ borderTop: '1px solid var(--color-border-hairline)' }}
+                                >
+                                  {message.citations.map((citation, idx) => (
+                                    <motion.button
+                                      key={citation.chunkId}
+                                      initial={{ opacity: 0, scale: 0.92 }}
+                                      animate={{ opacity: 1, scale: 1 }}
+                                      transition={{ duration: 0.15, delay: idx * 0.04 }}
+                                      whileHover={{ scale: 1.03 }}
+                                      whileTap={{ scale: 0.97 }}
+                                      onClick={() => openCitation(citation)}
+                                      className="flex items-center gap-1.5 text-[11px]"
+                                      style={{
+                                        padding: '4px 10px',
+                                        borderRadius: 8,
+                                        border: '1px solid var(--color-border-subtle)',
+                                        background: 'rgba(255,255,255,0.03)',
+                                        color: 'var(--color-text-secondary)',
+                                        cursor: 'default',
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        e.currentTarget.style.background = 'rgba(255,255,255,0.06)'
+                                        e.currentTarget.style.color = 'var(--color-text-primary)'
+                                      }}
+                                      onMouseLeave={(e) => {
+                                        e.currentTarget.style.background = 'rgba(255,255,255,0.03)'
+                                        e.currentTarget.style.color = 'var(--color-text-secondary)'
+                                      }}
+                                    >
+                                      <BookOpen
+                                        className="h-3 w-3 shrink-0"
+                                        style={{ color: 'var(--color-accent-mid)' }}
+                                      />
+                                      <span className="max-w-[160px] truncate">
+                                        {citation.docTitle}
+                                      </span>
+                                    </motion.button>
+                                  ))}
+                                </motion.div>
+                              )}
+                          </AnimatePresence>
                         </div>
                       )}
                     </motion.div>

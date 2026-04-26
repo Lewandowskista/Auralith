@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { ReactElement } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { staggerListVariants, staggerItemVariants } from '@auralith/design-system'
 import {
   Thermometer,
   Wind,
@@ -544,12 +545,17 @@ export function WeatherScreen(): ReactElement {
               Next 24 Hours
             </div>
             <div className="overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
-              <div className="flex gap-2 pb-2" style={{ minWidth: 'max-content' }}>
+              <motion.div
+                className="flex gap-2 pb-2"
+                style={{ minWidth: 'max-content' }}
+                variants={staggerListVariants}
+                initial="hidden"
+                animate="visible"
+              >
                 {hourly.map((h) => (
                   <motion.div
                     key={h.time}
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
+                    variants={staggerItemVariants}
                     className="flex flex-col items-center gap-1.5 px-3 py-3 rounded-xl min-w-[64px]"
                     style={{
                       background: 'rgba(255,255,255,0.04)',
@@ -571,7 +577,7 @@ export function WeatherScreen(): ReactElement {
                     )}
                   </motion.div>
                 ))}
-              </div>
+              </motion.div>
             </div>
           </div>
         )}
@@ -585,7 +591,7 @@ export function WeatherScreen(): ReactElement {
             >
               7-Day Forecast
             </div>
-            <div
+            <motion.div
               className="rounded-2xl overflow-hidden"
               style={{
                 background: 'rgba(20,20,28,0.80)',
@@ -593,6 +599,9 @@ export function WeatherScreen(): ReactElement {
                 backdropFilter: 'blur(12px)',
                 WebkitBackdropFilter: 'blur(12px)',
               }}
+              variants={staggerListVariants}
+              initial="hidden"
+              animate="visible"
             >
               {(() => {
                 const range = daily.reduce(
@@ -609,9 +618,7 @@ export function WeatherScreen(): ReactElement {
                   return (
                     <motion.div
                       key={day.date}
-                      initial={{ opacity: 0, x: -8 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: i * 0.04 }}
+                      variants={staggerItemVariants}
                       className="flex items-center gap-4 px-5 py-3.5"
                       style={{
                         borderTop: i > 0 ? '1px solid var(--color-border-hairline)' : undefined,
@@ -661,7 +668,7 @@ export function WeatherScreen(): ReactElement {
                   )
                 })
               })()}
-            </div>
+            </motion.div>
           </div>
         )}
 

@@ -49,6 +49,7 @@ export default defineConfig({
           'sqlite-vec',
           'pdf-parse',
           'electron',
+          'canvas',
         ],
       },
     },

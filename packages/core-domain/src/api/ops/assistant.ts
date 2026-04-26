@@ -51,6 +51,9 @@ export const AssistantGetSessionResultSchema = z.object({
   ),
 })
 
+export const AssistantDeleteSessionParamsSchema = z.object({ sessionId: z.string() })
+export const AssistantDeleteSessionResultSchema = z.object({ deleted: z.boolean() })
+
 export const AssistantListSessionsParamsSchema = z.object({
   limit: z.number().int().positive().default(20),
   offset: z.number().int().min(0).default(0),

@@ -6,8 +6,9 @@ import {
   WeatherGetForecastParamsSchema,
   WeatherSetLocationParamsSchema,
   WeatherGetBriefingParamsSchema,
+  WeatherSetLocationByCityParamsSchema,
 } from '@auralith/core-domain'
-import { fetchWeather, buildWeatherBriefing } from '@auralith/core-weather'
+import { fetchWeather, buildWeatherBriefing, geocodeCity } from '@auralith/core-weather'
 import { z } from 'zod'
 
 let _bundle: DbBundle | null = null
@@ -77,5 +78,18 @@ export function registerWeatherHandlers(): void {
     const { lat, lon } = getLocation(bundle)
     const payload = await fetchWeather(lat, lon)
     return buildWeatherBriefing(payload)
+  })
+
+  registerHandler('weather.setLocationByCity', async (params) => {
+    const { city, country } = WeatherSetLocationByCityParamsSchema.parse(params)
+    const bundle = getBundle()
+    const settings = createSettingsRepo(bundle.db)
+    const { lat, lon, resolvedName } = await geocodeCity(city, country)
+    settings.set('weather.lat', lat)
+    settings.set('weather.lon', lon)
+    settings.set('weather.label', resolvedName)
+    settings.set('weather.city', city)
+    settings.set('weather.country', country ?? '')
+    return { updated: true, resolvedName, lat, lon }
   })
 }

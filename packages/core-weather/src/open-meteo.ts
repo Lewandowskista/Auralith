@@ -167,6 +167,58 @@ export function buildWeatherBriefing(payload: WeatherPayload): {
   return { summary: parts.join(' '), alertLevel }
 }
 
+type GeocodingResult = {
+  latitude: number
+  longitude: number
+  name: string
+  country: string
+  country_code: string
+}
+
+type GeocodingResponse = {
+  results?: GeocodingResult[]
+}
+
+export type GeocodeResult = {
+  lat: number
+  lon: number
+  resolvedName: string
+}
+
+export async function geocodeCity(city: string, country?: string): Promise<GeocodeResult> {
+  const url = new URL('https://geocoding-api.open-meteo.com/v1/search')
+  url.searchParams.set('name', city)
+  url.searchParams.set('count', '10')
+  url.searchParams.set('language', 'en')
+  url.searchParams.set('format', 'json')
+
+  const res = await fetch(url.toString(), {
+    signal: AbortSignal.timeout(10_000),
+    headers: { 'User-Agent': 'Auralith/1.0' },
+  })
+  if (!res.ok) throw new Error(`Geocoding error: ${res.status}`)
+
+  const data = (await res.json()) as GeocodingResponse
+  if (!data.results || data.results.length === 0) {
+    throw Object.assign(new Error(`City not found: ${city}`), { code: 'CITY_NOT_FOUND' })
+  }
+
+  let match = data.results[0] as GeocodingResult
+  if (country) {
+    const normalizedCountry = country.trim().toUpperCase()
+    const countryMatch = data.results.find(
+      (r) => r.country_code.toUpperCase() === normalizedCountry,
+    )
+    if (countryMatch) match = countryMatch
+  }
+
+  return {
+    lat: match.latitude,
+    lon: match.longitude,
+    resolvedName: `${match.name}, ${match.country}`,
+  }
+}
+
 // Open-Meteo response shape (minimal)
 type OpenMeteoResponse = {
   current: {

@@ -7,7 +7,7 @@ type SuggestionRow = { id: string; title: string; kind: string }
 function useTime(): string {
   const [time, setTime] = useState(() => formatTime(new Date()))
   useEffect(() => {
-    const id = setInterval(() => setTime(formatTime(new Date())), 10_000)
+    const id = setInterval(() => setTime(formatTime(new Date())), 60_000)
     return () => clearInterval(id)
   }, [])
   return time

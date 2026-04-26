@@ -1,7 +1,9 @@
 import { EventEmitter } from 'events'
 
 // Lightweight energy-based Voice Activity Detection.
-// Processes raw PCM-16 (16 kHz mono) buffers and emits 'speech-start', 'speech-end'.
+// Processes raw PCM-16 (16 kHz mono) buffers and emits:
+//   'speech-start' / 'speech-end' — activity events
+//   'level' (value: number 0..1) — ~20 ms RMS meter tick (always, regardless of speaking state)
 //
 // Algorithm: compute RMS energy over a sliding window; threshold crossing with
 // onset/offset hysteresis to avoid rapid toggling on noisy signals.
@@ -15,6 +17,9 @@ const OFFSET_FRAMES = 20 // consecutive below-threshold frames → speech end (4
 
 const DEFAULT_ENERGY_THRESHOLD = 200 // RMS value out of 32767
 
+// Level meter throttle: emit at most once per 50 ms to keep IPC light
+const LEVEL_EMIT_INTERVAL_MS = 50
+
 export type VadConfig = {
   energyThreshold?: number
 }
@@ -23,6 +28,7 @@ export type VadConfig = {
  * Emits:
  * - 'speech-start': user started speaking
  * - 'speech-end': user stopped speaking (natural endpoint)
+ * - 'level' (value: 0..1): normalised RMS level, ~20 Hz, emitted regardless of speaking state
  */
 export class VadService extends EventEmitter {
   private buffer = Buffer.alloc(0)
@@ -31,6 +37,7 @@ export class VadService extends EventEmitter {
   private speaking = false
   private threshold: number
   private active = false
+  private lastLevelEmitMs = 0
 
   constructor(config: VadConfig = {}) {
     super()
@@ -65,6 +72,7 @@ export class VadService extends EventEmitter {
     this.aboveCount = 0
     this.belowCount = 0
     this.speaking = false
+    this.lastLevelEmitMs = 0
   }
 
   private processFrames(): void {
@@ -76,6 +84,16 @@ export class VadService extends EventEmitter {
 
       const rms = computeRms(frame)
       const isLoud = rms >= this.threshold
+
+      // Emit level meter event (throttled to ~20 Hz)
+      const now = Date.now()
+      if (now - this.lastLevelEmitMs >= LEVEL_EMIT_INTERVAL_MS) {
+        this.lastLevelEmitMs = now
+        // Normalise against a practical peak of 4× threshold so the meter
+        // fills to ~100% on loud speech without being clipped by whisper loudness.
+        const level = Math.min(1, rms / (this.threshold * 4))
+        this.emit('level', level)
+      }
 
       if (isLoud) {
         this.belowCount = 0

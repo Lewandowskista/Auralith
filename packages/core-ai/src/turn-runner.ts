@@ -1,6 +1,9 @@
 import { z } from 'zod'
 import type { OllamaClient, ChatMessage } from './client'
 import { buildAssistantCapabilityContext } from './capabilities'
+import { buildAppIdentityBlock } from './app-capabilities'
+import { formatToon } from './prompt-format'
+import { resolveModelConfig } from './model-resolver'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -21,6 +24,8 @@ export type ToolManifestEntry = {
 export type TurnRunnerDeps = {
   chatClient: OllamaClient
   chatModel: string
+  /** AI role used to resolve the correct num_ctx. Defaults to 'chat'. */
+  chatRole?: string
   /** Broadcast a token to the renderer (streaming UX) */
   onToken: (token: string) => void
   /** Execute a tool. Returns tool result JSON string or throws. */
@@ -37,6 +42,13 @@ export type TurnRunnerDeps = {
     toolParamsJson?: string
     toolResultJson?: string
   }) => void
+}
+
+/** Pre-built app context string from the AppContextBroker — injected into the system prompt */
+export type AppContextInjection = {
+  promptContext: string
+  capabilitiesIncluded: string[]
+  hadCloudRestrictions: boolean
 }
 
 // ── Structured output schema ──────────────────────────────────────────────────
@@ -90,17 +102,24 @@ function buildSystemPrompt(
   ragContext: string,
   capabilityContext: string,
   personaOverride?: string,
+  appContext?: AppContextInjection,
+  includeNewsRules?: boolean,
 ): string {
-  const toolsJson = JSON.stringify(
-    tools.map((t) => ({
-      id: t.id,
-      tier: t.tier,
-      description: t.description,
-      params: t.paramsSchema,
-    })),
-    null,
-    2,
-  )
+  // TOON-like compact record table for tool catalog.
+  // Saves ~40% tokens vs pretty-printed JSON for typical tool lists on small models.
+  // Output is still strict JSON — TOON is only used for this input context.
+  const toolsSection = tools.length > 0
+    ? formatToon(
+        tools.map((t) => ({
+          id: t.id,
+          tier: t.tier,
+          description: t.description,
+          params: JSON.stringify(t.paramsSchema),
+        })),
+        ['id', 'tier', 'description', 'params'],
+        'tools',
+      )
+    : '(no tools available)'
 
   const contextSection = ragContext
     ? `\n\nKnowledge context (use when relevant):\n${ragContext}\n`
@@ -112,7 +131,15 @@ function buildSystemPrompt(
 
   const capabilitiesSection = capabilityContext.trim() ? `\n\n${capabilityContext.trim()}\n` : ''
 
-  return `You are Auralith, a premium local AI assistant. You are helpful, concise, and precise.${contextSection}${capabilitiesSection}${personaSection}
+  // Inject pre-built app context from the broker (weather, news, activity, etc.)
+  const appContextSection =
+    appContext?.promptContext?.trim()
+      ? `\n\n${appContext.promptContext.trim()}\n`
+      : ''
+
+  const appIdentity = buildAppIdentityBlock()
+
+  return `${appIdentity}${contextSection}${appContextSection}${capabilitiesSection}${personaSection}
 
 You can either speak a response or call a tool. Respond with ONLY valid JSON in one of these shapes:
 
@@ -123,17 +150,39 @@ To call a tool:
 {"type":"tool","id":"<tool_id>","params":{...}}
 
 Available tools:
-${toolsJson}
+${toolsSection}
 
 Rules:
 - Prefer speaking over tool use when no action is needed.
-- For questions about current/local Auralith app data, use a safe read tool before answering when one is available.
+- When the ## Auralith App Context section is present, use it as the source of truth for weather, news, activity, knowledge, routines, and suggestions. Do not invent data not present there.
+- If app context for a module is absent, say so honestly rather than guessing.
+- For questions about current/local Auralith app data not in the context above, use a safe read tool before answering when one is available.
 - For "confirm" and "restricted" tier tools the user will be shown a confirmation dialog.
 - Never invent tool IDs not listed above.
+- High-risk (restricted) tools require explicit user confirmation before execution.
 - Do not claim you lack access to Auralith features when the capability context or tools show that you do have access.
-- Keep spoken responses concise and natural for text-to-speech.
-- Do not include markdown in spoken responses.
-- Reply with ONLY the JSON object — no prose, no code fences.`
+- Use markdown formatting (bullets, bold, code blocks, tables) when it aids clarity in your response text.
+- If the user's request is ambiguous, ask one focused clarifying question before proceeding.
+- When the user refers to "it", "that", or "the previous", look back in the conversation history to resolve the reference.
+
+${includeNewsRules ? `News briefing rules — MANDATORY (apply whenever answering any news question):
+CONTEXT CONTRACT: When news_items or news_articles are present in ## Auralith App Context, you MUST use them.
+You MUST cite at least one exact title from news_items/news_articles in every news response.
+You are NOT allowed to summarize news without citing at least one exact article title from the context.
+BANNED phrases — NEVER use these: "an article", "some news", "one article discusses", "might be about", "appears to", "there are some articles", "several stories".
+REQUIRED for every article reference: exact title as it appears in the data, source name, relative time (e.g. "Reuters, 2h ago").
+If news_items is absent from context, respond ONLY with: "I don't have detailed article data loaded right now." — do NOT summarize from cluster labels alone.
+Output format for multi-story responses:
+Headline: <short synthesis>
+
+Top stories:
+- <Cluster/topic headline> (Source, Time)
+  - <1-2 sentence summary using exact article title>
+  - Why it matters: <impact>
+Prioritise by importance field (high first), then recency (latest published first).
+Do not invent, infer, or paraphrase article titles — copy them exactly from the context data.
+
+` : ''}- Reply with ONLY the JSON object — no prose, no code fences.`
 }
 
 // ── Turn runner ───────────────────────────────────────────────────────────────
@@ -155,29 +204,45 @@ export async function runTurn(opts: {
   ragContext: string
   capabilityContext?: string
   personaOverride?: string
+  /** Pre-built app context from the AppContextBroker — injects weather, news, activity, etc. */
+  appContext?: AppContextInjection
   deps: TurnRunnerDeps
 }): Promise<TurnRunnerResult> {
-  const { userText, sessionId, history, tools, ragContext, personaOverride, deps } = opts
+  const { userText, sessionId, history, tools, ragContext, personaOverride, appContext, deps } = opts
   const deadline = Date.now() + WALL_CLOCK_MS
+  const { num_ctx } = resolveModelConfig(deps.chatRole ?? 'chat', { model: deps.chatModel })
+
+  const includeNewsRules =
+    appContext?.capabilitiesIncluded?.includes('news') ||
+    ragContext.includes('news') ||
+    userText.toLowerCase().includes('news')
 
   const systemPrompt = buildSystemPrompt(
     tools,
     ragContext,
     opts.capabilityContext ?? buildAssistantCapabilityContext(tools),
     personaOverride,
+    appContext,
+    includeNewsRules,
   )
 
-  // Build message history for Ollama
+  // Build message history for Ollama — keep last 12 turns; compress older turns to save tokens
+  const recentHistory = history.slice(-12)
   const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
-    ...history.slice(-6).map(
-      (m): ChatMessage => ({
-        role: m.role === 'tool_result' ? 'user' : m.role,
-        content:
+    ...recentHistory.map(
+      (m, idx): ChatMessage => {
+        const role = m.role === 'tool_result' ? 'user' : m.role
+        let content =
           m.role === 'tool_result'
             ? `Tool result for ${m.toolId ?? 'unknown'}: ${m.toolResultJson ?? '{}'}`
-            : m.content,
-      }),
+            : m.content
+        // Truncate older turns (beyond the 4 most recent) to save context tokens
+        if (idx < recentHistory.length - 4 && content.length > 300) {
+          content = content.slice(0, 300) + '…'
+        }
+        return { role, content }
+      },
     ),
     { role: 'user', content: userText },
   ]
@@ -192,29 +257,95 @@ export async function runTurn(opts: {
   while (toolCallCount < MAX_TOOL_CALLS_PER_TURN) {
     if (Date.now() > deadline) break
 
-    // Call the LLM — use non-streaming for the structured output decision
+    // Stream the LLM response. We buffer the full JSON envelope but extract and
+    // forward the inner speak text as it arrives so the UI sees real first-token
+    // latency instead of waiting for the entire generation to complete.
     let raw = ''
+    let streamError: Error | null = null
+    let speakTextEmitted = false
+    let speakTextDone = false
+    // Tracks how many characters of the extracted speak text have been forwarded.
+    let speakEmitCursor = 0
+
+    // Prefix we expect for a speak response — used to detect the inner text boundary.
+    const SPEAK_PREFIX = '"text":"'
+
     try {
-      raw = await deps.chatClient.generate({
+      for await (const token of deps.chatClient.stream({
         model: deps.chatModel,
         messages,
         format: 'json',
-        maxTokens: 512,
+        maxTokens: 1024,
         temperature: 0.3,
-      })
+        num_ctx,
+      })) {
+        raw += token
+
+        // Progressively extract and emit the inner speak text as it streams in.
+        // We look for the "text":"..." value after the speak-type prefix lands in
+        // the buffer, then forward newly-arrived characters of that value only,
+        // skipping the JSON scaffold entirely. speakTextDone is set once the
+        // closing quote of the JSON string value has been reached.
+        if (!speakTextDone) {
+          const prefixIdx = raw.indexOf(SPEAK_PREFIX)
+          if (prefixIdx !== -1) {
+            // Speak response detected — emit newly arrived inner text characters.
+            const textStart = prefixIdx + SPEAK_PREFIX.length
+            // Walk from our cursor to the current end, stopping at the closing
+            // quote that terminates the JSON string value.
+            let i = textStart + speakEmitCursor
+            while (i < raw.length) {
+              const ch = raw[i]
+              // Stop at the unescaped closing quote of the JSON string value.
+              if (ch === '"' && raw[i - 1] !== '\\') {
+                speakTextDone = true
+                break
+              }
+              // Unescape basic JSON sequences before forwarding.
+              if (ch === '\\' && i + 1 < raw.length) {
+                const next = raw[i + 1]
+                const unescaped =
+                  next === 'n' ? '\n' :
+                  next === 't' ? '\t' :
+                  next === 'r' ? '\r' :
+                  next === '"' ? '"' :
+                  next === '\\' ? '\\' : ch + next
+                deps.onToken(unescaped)
+                speakEmitCursor += 2
+                i += 2
+              } else {
+                deps.onToken(ch ?? '')
+                speakEmitCursor++
+                i++
+              }
+            }
+            speakTextEmitted = true
+          }
+        }
+      }
     } catch (err) {
-      const errText = err instanceof Error ? err.message : 'Ollama unavailable'
-      deps.saveTurn?.({ sessionId, role: 'assistant', content: errText })
-      return { finalText: errText, toolsInvoked, sessionId }
+      streamError = err instanceof Error ? err : new Error('Ollama unavailable')
     }
 
-    // Parse the structured output
+    if (streamError) {
+      // If nothing was streamed yet, return an error. If partial text was already
+      // forwarded, treat what we have as the final response.
+      if (!speakTextEmitted) {
+        const errText = streamError.message
+        deps.saveTurn?.({ sessionId, role: 'assistant', content: errText })
+        return { finalText: errText, toolsInvoked, sessionId }
+      }
+      // Otherwise fall through — parseTurnOutput will work on whatever buffered.
+    }
+
+    // Parse the complete buffered JSON to determine speak vs tool.
     let parsed: TurnOutput | null = null
 
     try {
       parsed = parseTurnOutput(raw, tools)
       if (!parsed) {
-        // One retry with explicit schema reminder
+        // One retry with explicit schema reminder — non-streaming since it's a
+        // correction pass and latency is already paid.
         const retryMessages: ChatMessage[] = [
           ...messages,
           { role: 'assistant', content: raw },
@@ -230,27 +361,30 @@ export async function runTurn(opts: {
           format: 'json',
           maxTokens: 512,
           temperature: 0,
+          num_ctx,
         })
         parsed = parseTurnOutput(retryRaw, tools)
+        // If retry produced a speak response and nothing was emitted yet, forward it.
+        if (parsed?.type === 'speak' && !speakTextEmitted) {
+          deps.onToken(parsed.text)
+          speakTextEmitted = true
+        }
       }
     } catch {
       // JSON parse failed even after retry — fall back to plain speech
     }
 
     if (!parsed) {
-      // Fallback: treat raw as plain text response
+      // Fallback: treat raw as plain text response.
       finalText = raw.replace(/^["']|["']$/g, '').trim()
-      deps.onToken(finalText)
+      if (!speakTextEmitted) deps.onToken(finalText)
       deps.saveTurn?.({ sessionId, role: 'assistant', content: finalText })
       break
     }
 
     if (parsed.type === 'speak') {
       finalText = parsed.text
-      // Stream the response token by token for streaming UX
-      for (const char of parsed.text) {
-        deps.onToken(char)
-      }
+      // Text was already emitted token-by-token during streaming; nothing more to send.
       deps.saveTurn?.({ sessionId, role: 'assistant', content: parsed.text })
       break
     }

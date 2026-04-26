@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState } from 'react'
+import { useEffect, useCallback, useState, useMemo } from 'react'
 import type { ReactElement } from 'react'
 import { Command } from 'cmdk'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -52,13 +52,17 @@ export function CommandPalette({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [handleKeyDown])
 
-  // Group items by group label
-  const grouped = items.reduce<Record<string, PaletteItem[]>>((acc, item) => {
-    const g = item.group
-    if (!acc[g]) acc[g] = []
-    acc[g]?.push(item)
-    return acc
-  }, {})
+  // Group items by group label — memoized so re-renders from parent don't recompute
+  const grouped = useMemo(
+    () =>
+      items.reduce<Record<string, PaletteItem[]>>((acc, item) => {
+        const g = item.group
+        if (!acc[g]) acc[g] = []
+        acc[g]?.push(item)
+        return acc
+      }, {}),
+    [items],
+  )
 
   return (
     <AnimatePresence>

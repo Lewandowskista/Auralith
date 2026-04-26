@@ -11,3 +11,8 @@ coverage
 *.db-shm
 *.db-wal
 release
+
+# Piper TTS binaries and voice models (large binary assets)
+resources/piper/
+apps/desktop/resources/piper/
+apps/desktop/src/workers/piper/

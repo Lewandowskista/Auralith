@@ -10,9 +10,14 @@ import {
   AssistantListSessionsParamsSchema,
   AssistantDeleteSessionParamsSchema,
 } from '@auralith/core-domain'
-import type { OllamaClient } from '@auralith/core-ai'
+import type { OllamaClient, ModelRouter } from '@auralith/core-ai'
 import { runTurn, getAiQueue } from '@auralith/core-ai'
-import { hybridSearch, assembleCitations } from '@auralith/core-retrieval'
+import {
+  hybridSearch,
+  assembleCitations,
+  rewriteQuery,
+  createLlmReranker,
+} from '@auralith/core-retrieval'
 import { listToolsForModel, executeTool } from '@auralith/core-tools'
 import type Database from 'better-sqlite3'
 import type { ExecutorDeps } from '@auralith/core-tools'
@@ -26,6 +31,7 @@ type AssistantDeps = {
   embedClient: OllamaClient
   embedModel: string
   executorDeps: ExecutorDeps
+  router?: ModelRouter
 }
 
 type CachedTurn = {
@@ -182,12 +188,14 @@ function pushCachedTurn(sessionId: string, turn: CachedTurn): void {
 export async function sendVoiceMessage(
   text: string,
   win: BrowserWindow | null,
+  conversationId?: string,
+  onSpeakChunk?: (chunk: string) => void,
 ): Promise<{ messageId: string }> {
   const { bundle, sqlite, chatClient, chatModel, embedClient, embedModel, executorDeps } = getDeps()
   const settings = createSettingsRepo(bundle.db)
   const personaOverride = settings.get('assistant.personaOverride', z.string())
   const messageId = randomUUID()
-  const sessionId = messageId
+  const sessionId = conversationId ?? messageId
 
   abortFlags.set(messageId, false)
 
@@ -195,8 +203,24 @@ export async function sendVoiceMessage(
   let citations: ReturnType<typeof assembleCitations>['citations'] = []
 
   try {
+    const { router } = getDeps()
+    const settingsVoice = createSettingsRepo(bundle.db)
+    const queryRewriteVoice = settingsVoice.get('retrieval.queryRewrite', z.boolean()) ?? true
+    const parentContextVoice = settingsVoice.get('retrieval.parentContext', z.number()) ?? 1
+
+    const additionalQueriesVoice =
+      queryRewriteVoice && router
+        ? await rewriteQuery(text, embedClient, router.modelFor('classifier'))
+        : []
+
     const hits = await hybridSearch(
-      { query: text, topK: 6, mode: 'hybrid' },
+      {
+        query: text,
+        topK: 6,
+        mode: 'hybrid',
+        additionalQueries: additionalQueriesVoice,
+        parentContext: parentContextVoice,
+      },
       bundle.db,
       sqlite,
       bundle.vec,
@@ -267,6 +291,7 @@ export async function sendVoiceMessage(
         onToken: (token) => {
           if (!abortFlags.get(messageId)) {
             win?.webContents.send('assistant:token', { messageId, token })
+            onSpeakChunk?.(token)
           }
         },
         executeTool: async (toolId, toolParams) => {
@@ -366,8 +391,33 @@ export function registerAssistantHandlers(): void {
     let citations: ReturnType<typeof assembleCitations>['citations'] = []
 
     try {
+      const { router } = getDeps()
+      const settings2 = createSettingsRepo(bundle.db)
+      const queryRewrite = settings2.get('retrieval.queryRewrite', z.boolean()) ?? true
+      const useReranker = settings2.get('retrieval.reranker', z.boolean()) ?? false
+      const parentContext = settings2.get('retrieval.parentContext', z.number()) ?? 1
+
+      // Query rewriting: expand the query using phi4-mini (runs in parallel with FTS)
+      const additionalQueries =
+        queryRewrite && router
+          ? await rewriteQuery(message, embedClient, router.modelFor('classifier'))
+          : []
+
+      const reranker =
+        useReranker && router
+          ? createLlmReranker(embedClient, router.modelFor('classifier'))
+          : undefined
+
       const hits = await hybridSearch(
-        { query: message, ...(spaceId !== undefined ? { spaceId } : {}), topK: 6, mode: 'hybrid' },
+        {
+          query: message,
+          ...(spaceId !== undefined ? { spaceId } : {}),
+          topK: 6,
+          mode: 'hybrid',
+          additionalQueries,
+          ...(reranker ? { reranker } : {}),
+          parentContext,
+        },
         bundle.db,
         sqlite,
         bundle.vec,
@@ -382,7 +432,7 @@ export function registerAssistantHandlers(): void {
           .join('\n\n---\n\n')
       }
     } catch {
-      // No retrieval context â€” continue without it.
+      // No retrieval context — continue without it.
     }
 
     const cachedHistory =

@@ -6,12 +6,15 @@ import { runFullPipeline } from '@auralith/core-news'
 import { fetchWeather, buildWeatherBriefing } from '@auralith/core-weather'
 import { getScheduler } from '@auralith/core-scheduler'
 import type { OllamaClient } from '@auralith/core-ai'
+import { getAiQueue, createPromptCache } from '@auralith/core-ai'
+import { createPromptCacheRepo } from '@auralith/core-db'
 import { z } from 'zod'
 
 type BriefingDeps = {
   bundle: DbBundle
   ollamaClient: OllamaClient
   classifierModel: string
+  summarizeModel?: string
 }
 
 export type BriefingPayload = {
@@ -32,6 +35,32 @@ export function initBriefingDeps(deps: BriefingDeps): void {
   _deps = deps
 }
 
+export function getLastBriefingPayload(): BriefingPayload | null {
+  if (!_deps) return null
+  const settings = createSettingsRepo(_deps.bundle.db)
+  const raw = settings.get('briefing.lastPayload', z.string())
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as BriefingPayload
+  } catch {
+    return null
+  }
+}
+
+export async function triggerBriefingNow(): Promise<void> {
+  if (!_deps) return
+  const { bundle, ollamaClient } = _deps
+  const settings = createSettingsRepo(bundle.db)
+  const briefing = await buildBriefing(bundle, ollamaClient)
+  const isWeekend = [0, 6].includes(new Date().getDay())
+  const weekendMode =
+    settings.get('leisure.weekendMode', z.enum(['auto', 'always', 'off'])) ?? 'auto'
+  const leisureActive = weekendMode === 'always' || (weekendMode === 'auto' && isWeekend)
+  if (leisureActive) briefing.tone = 'leisure'
+  settings.set('briefing.lastPayload', JSON.stringify(briefing))
+  broadcastBriefing(briefing)
+}
+
 export function setupBriefingScheduler(): void {
   const scheduler = getScheduler()
 
@@ -44,7 +73,7 @@ export function setupBriefingScheduler(): void {
     quietEnd: 6,
     run: async () => {
       if (!_deps) return
-      const { bundle, ollamaClient, classifierModel } = _deps
+      const { bundle, ollamaClient, classifierModel, summarizeModel } = _deps
       const settings = createSettingsRepo(bundle.db)
 
       const briefingEnabled = settings.get('briefing.morningEnabled', z.boolean()) ?? true
@@ -52,21 +81,44 @@ export function setupBriefingScheduler(): void {
 
       const repo = createNewsRepo(bundle.db)
 
-      // Refresh news first
-      await runFullPipeline({
-        repo,
-        ollamaClient,
-        classifierModel,
-      })
+      // Run as a background AI task so it does not block foreground chat.
+      let queue = null as ReturnType<typeof getAiQueue> | null
+      try {
+        queue = getAiQueue()
+      } catch {
+        /* queue not initialized */
+      }
 
-      const now = new Date()
-      const isWeekend = [0, 6].includes(now.getDay())
-      const weekendMode =
-        settings.get('leisure.weekendMode', z.enum(['auto', 'always', 'off'])) ?? 'auto'
-      const leisureActive = weekendMode === 'always' || (weekendMode === 'auto' && isWeekend)
-      const briefing = await buildBriefing(bundle, ollamaClient)
-      if (leisureActive) briefing.tone = 'leisure'
-      broadcastBriefing(briefing)
+      const work = async (): Promise<void> => {
+        const briefingCacheRepo = createPromptCacheRepo(bundle.db)
+        const briefingPromptCache = createPromptCache({
+          get: (h) => briefingCacheRepo.get(h),
+          set: (r) => briefingCacheRepo.set(r),
+          evictExpired: () => briefingCacheRepo.evictExpired(),
+        })
+        await runFullPipeline({
+          repo,
+          ollamaClient,
+          classifierModel,
+          ...(summarizeModel ? { summarizeModel } : {}),
+          promptCache: briefingPromptCache,
+        })
+        const now = new Date()
+        const isWeekend = [0, 6].includes(now.getDay())
+        const weekendMode =
+          settings.get('leisure.weekendMode', z.enum(['auto', 'always', 'off'])) ?? 'auto'
+        const leisureActive = weekendMode === 'always' || (weekendMode === 'auto' && isWeekend)
+        const briefing = await buildBriefing(bundle, ollamaClient)
+        if (leisureActive) briefing.tone = 'leisure'
+        settings.set('briefing.lastPayload', JSON.stringify(briefing))
+        broadcastBriefing(briefing)
+      }
+
+      if (queue) {
+        await queue.enqueueBackgroundAiTask(work)
+      } else {
+        await work()
+      }
     },
   })
 

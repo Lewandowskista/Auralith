@@ -54,3 +54,14 @@ export const WeatherGetBriefingResultSchema = z.object({
   summary: z.string(),
   alertLevel: z.enum(['none', 'watch', 'warning']),
 })
+
+export const WeatherSetLocationByCityParamsSchema = z.object({
+  city: z.string().min(1),
+  country: z.string().optional(),
+})
+export const WeatherSetLocationByCityResultSchema = z.object({
+  updated: z.boolean(),
+  resolvedName: z.string(),
+  lat: z.number(),
+  lon: z.number(),
+})

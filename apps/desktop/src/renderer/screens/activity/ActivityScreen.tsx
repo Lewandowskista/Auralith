@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import type { ReactElement } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { TabContent } from '@auralith/design-system'
 import {
   FilePlus,
   FileEdit,
@@ -187,8 +188,11 @@ type GroupedItem =
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+const TAB_ORDER: ActiveView[] = ['timeline', 'clipboard', 'appusage']
+
 export function ActivityScreen(): ReactElement {
   const [view, setView] = useState<ActiveView>('timeline')
+  const prevViewRef = useRef<ActiveView>('timeline')
 
   return (
     <ScreenShell title="Activity" variant="split">
@@ -222,7 +226,10 @@ export function ActivityScreen(): ReactElement {
             return (
               <button
                 key={id}
-                onClick={() => setView(id)}
+                onClick={() => {
+                  prevViewRef.current = view
+                  setView(id)
+                }}
                 className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-violet-500"
                 style={{
                   background: active ? 'rgba(139,92,246,0.15)' : 'transparent',
@@ -238,9 +245,16 @@ export function ActivityScreen(): ReactElement {
         </div>
 
         <div className="flex-1 overflow-hidden">
-          {view === 'timeline' && <TimelineView />}
-          {view === 'clipboard' && <ClipboardView />}
-          {view === 'appusage' && <AppUsageView />}
+          <TabContent
+            tabKey={view}
+            direction={
+              TAB_ORDER.indexOf(view) - TAB_ORDER.indexOf(prevViewRef.current) >= 0 ? 1 : -1
+            }
+          >
+            {view === 'timeline' && <TimelineView />}
+            {view === 'clipboard' && <ClipboardView />}
+            {view === 'appusage' && <AppUsageView />}
+          </TabContent>
         </div>
       </div>
     </ScreenShell>
@@ -291,10 +305,14 @@ function TimelineView(): ReactElement {
     void load()
   }, [load])
   useEffect(() => {
-    const id = setInterval(() => {
-      void load()
-    }, 5000)
-    return () => clearInterval(id)
+    // Push-driven reload when the file watcher writes a new event
+    const unsub = window.auralith.on('activity:updated', () => void load())
+    // Fallback poll at 30s in case a push event is missed
+    const id = setInterval(() => void load(), 30_000)
+    return () => {
+      unsub()
+      clearInterval(id)
+    }
   }, [load])
   useEffect(() => {
     void window.auralith.invoke('activity.getWatchedFolders', {}).then((res) => {
@@ -311,7 +329,10 @@ function TimelineView(): ReactElement {
     })
   }
 
-  const grouped = buildGroupedList(events, sessions, collapsedSessions)
+  const grouped = useMemo(
+    () => buildGroupedList(events, sessions, collapsedSessions),
+    [events, sessions, collapsedSessions],
+  )
 
   function handleAskAssistant(session: SessionRow) {
     void window.auralith.invoke('assistant.send', {
@@ -627,7 +648,7 @@ function ClipboardView(): ReactElement {
   useEffect(() => {
     const id = setInterval(() => {
       void load()
-    }, 5000)
+    }, 15_000)
     return () => clearInterval(id)
   }, [load])
 

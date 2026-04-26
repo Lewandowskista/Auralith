@@ -1,6 +1,7 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import type { HTMLMotionProps, Variants } from 'framer-motion'
 import type { ReactNode } from 'react'
+import type { ReactElement } from 'react'
 import { motionDuration, motionEasing, variants } from '../tokens/motion'
 
 type FadeRiseProps = HTMLMotionProps<'div'> & {
@@ -134,5 +135,44 @@ export function ShimmerLine({ className = '' }: { className?: string }) {
         animate="animate"
       />
     </div>
+  )
+}
+
+// Stagger list variants — parent staggers children 40ms apart on mount
+export const staggerListVariants: Variants = {
+  hidden: {},
+  visible: { transition: { staggerChildren: 0.04 } },
+}
+
+// Stagger item variants — each child fades up 6px
+export const staggerItemVariants: Variants = {
+  hidden: { opacity: 0, y: 6 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] } },
+}
+
+type TabContentProps = {
+  children: ReactNode
+  tabKey: string
+  direction: 1 | -1
+}
+
+// Directional tab content transition — slide + fade based on direction (1 = forward, -1 = back)
+export function TabContent({ children, tabKey, direction }: TabContentProps): ReactElement {
+  return (
+    <AnimatePresence mode="wait" custom={direction}>
+      <motion.div
+        key={tabKey}
+        custom={direction}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        initial={((d: number) => ({ opacity: 0, x: d * 20 })) as any}
+        animate={{ opacity: 1, x: 0 }}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        exit={((d: number) => ({ opacity: 0, x: d * -20 })) as any}
+        transition={{ duration: 0.18, ease: [0.2, 0.8, 0.2, 1] }}
+        style={{ width: '100%', height: '100%' }}
+      >
+        {children}
+      </motion.div>
+    </AnimatePresence>
   )
 }

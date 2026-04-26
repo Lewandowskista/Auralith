@@ -94,4 +94,28 @@ export function registerActivityHandlers(): void {
     watcher.addPaths(folders, watchRules)
     return { watching: folders }
   })
+
+  registerHandler('activity.setWatchedFolders', async (params) => {
+    const { folders } = z.object({ folders: z.array(z.string()) }).parse(params)
+    const { bundle, watcher } = getDeps()
+    const settings = createSettingsRepo(bundle.db)
+    settings.set('activity.watchedFolders', folders)
+
+    const rules = bundle.db.select().from(folderRules).all()
+    const watchRules = rules.map((r) => ({ path: r.path, spaceId: r.spaceId }))
+
+    watcher.stop()
+    if (folders.length > 0) {
+      watcher.updateFolderRules(watchRules)
+      watcher.start(folders)
+    }
+    return { watching: folders }
+  })
+
+  registerHandler('activity.getWatchedFolders', async () => {
+    const { bundle } = getDeps()
+    const settings = createSettingsRepo(bundle.db)
+    const folders = settings.get('activity.watchedFolders', z.array(z.string())) ?? []
+    return { folders }
+  })
 }

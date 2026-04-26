@@ -16,6 +16,8 @@ export type GenerateOpts = {
   format?: 'json'
   maxTokens?: number
   temperature?: number
+  /** Ollama context window size — controls VRAM usage. Clamped by resolveModelConfig. */
+  num_ctx?: number
   stream?: false
 }
 
@@ -63,6 +65,7 @@ export class OllamaClient {
       options: {
         num_predict: opts.maxTokens ?? 512,
         temperature: opts.temperature ?? 0,
+        ...(opts.num_ctx !== undefined ? { num_ctx: opts.num_ctx } : {}),
       },
     }
     if (opts.format === 'json') body['format'] = 'json'
@@ -85,6 +88,7 @@ export class OllamaClient {
       options: {
         num_predict: opts.maxTokens ?? 2048,
         temperature: opts.temperature ?? 0.7,
+        ...(opts.num_ctx !== undefined ? { num_ctx: opts.num_ctx } : {}),
       },
     }
     if (opts.format === 'json') body['format'] = 'json'

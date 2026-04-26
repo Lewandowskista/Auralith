@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'crypto'
+import type { ObservabilityRepo } from '@auralith/core-db'
 
 export type IpcRequest = {
   op: string
@@ -22,6 +23,13 @@ export type HandlerContext = {
 }
 
 const handlers = new Map<string, Handler>()
+
+// Injected after DB init — optional so router works before DB is ready
+let _obsRepo: ObservabilityRepo | null = null
+
+export function setObservabilityRepo(repo: ObservabilityRepo): void {
+  _obsRepo = repo
+}
 
 export function registerHandler(op: string, handler: Handler): void {
   handlers.set(op, handler)
@@ -47,12 +55,38 @@ export function setupIpcRouter(): void {
     const start = performance.now()
     try {
       const data = await handler(params, { event, requestId, traceId, op })
+      const ms = Math.round(performance.now() - start)
+      // Debounced batch-insert — skip very cheap ops to keep volume down
+      if (ms >= 5) {
+        _obsRepo?.queueTrace({
+          op,
+          durationMs: ms,
+          status: 'ok',
+          errCode: null,
+          ts: Date.now(),
+          paramsBytes: JSON.stringify(params).length,
+          resultBytes: JSON.stringify(data).length,
+        })
+      }
       return { ok: true, data, requestId, traceId }
     } catch (err) {
       const ms = Math.round(performance.now() - start)
       const message = err instanceof Error ? err.message : 'Unknown error'
+      const code =
+        err instanceof Error && 'code' in err
+          ? String((err as NodeJS.ErrnoException).code)
+          : undefined
       console.error(`[IPC ${traceId}] ${op} → error (${ms}ms):`, err)
-      return { ok: false, error: { message }, requestId, traceId }
+      _obsRepo?.queueTrace({
+        op,
+        durationMs: ms,
+        status: 'error',
+        errCode: code ?? null,
+        ts: Date.now(),
+        paramsBytes: JSON.stringify(params).length,
+        resultBytes: 0,
+      })
+      return { ok: false, error: { message, ...(code ? { code } : {}) }, requestId, traceId }
     }
   })
 }

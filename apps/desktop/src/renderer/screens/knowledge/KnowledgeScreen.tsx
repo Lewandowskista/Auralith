@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import type { ReactElement } from 'react'
 import { Search, RefreshCw, FileText, Plus, Trash2, FolderOpen, BookOpen } from 'lucide-react'
 import { toast } from 'sonner'
+import { motion, AnimatePresence } from 'framer-motion'
+import { staggerListVariants, staggerItemVariants } from '@auralith/design-system'
 import { OllamaBanner } from '../../components/OllamaBanner'
 import { renderMarkdown } from '../../lib/markdown'
 import { useOllamaStatus } from '../../hooks/useOllamaStatus'
@@ -227,29 +229,36 @@ export function KnowledgeScreen(): ReactElement {
             >
               <FolderOpen className="h-3.5 w-3.5 shrink-0" /> All spaces
             </button>
-            {spaces.map((s) => (
-              <div key={s.id} data-testid="space-row" className="group flex items-center">
-                <button
-                  onClick={() => setActiveSpaceId(s.id)}
-                  className={[
-                    'flex flex-1 min-w-0 items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500',
-                    activeSpaceId === s.id
-                      ? 'bg-violet-500/15 text-violet-300'
-                      : 'text-[var(--color-text-secondary)] hover:bg-white/5 hover:text-[var(--color-text-primary)]',
-                  ].join(' ')}
+            <motion.div variants={staggerListVariants} initial="hidden" animate="visible">
+              {spaces.map((s) => (
+                <motion.div
+                  key={s.id}
+                  data-testid="space-row"
+                  variants={staggerItemVariants}
+                  className="group flex items-center"
                 >
-                  <FolderOpen className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">{s.name}</span>
-                </button>
-                <button
-                  onClick={() => void handleDeleteSpace(s.id)}
-                  className="mr-1 hidden rounded p-0.5 text-[var(--color-text-tertiary)] hover:text-red-400 group-hover:flex focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
-                  aria-label={`Delete ${s.name}`}
-                >
-                  <Trash2 className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
+                  <button
+                    onClick={() => setActiveSpaceId(s.id)}
+                    className={[
+                      'flex flex-1 min-w-0 items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500',
+                      activeSpaceId === s.id
+                        ? 'bg-violet-500/15 text-violet-300'
+                        : 'text-[var(--color-text-secondary)] hover:bg-white/5 hover:text-[var(--color-text-primary)]',
+                    ].join(' ')}
+                  >
+                    <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">{s.name}</span>
+                  </button>
+                  <button
+                    onClick={() => void handleDeleteSpace(s.id)}
+                    className="mr-1 hidden rounded p-0.5 text-[var(--color-text-tertiary)] hover:text-red-400 group-hover:flex focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                    aria-label={`Delete ${s.name}`}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </motion.div>
+              ))}
+            </motion.div>
           </nav>
         </aside>
 
@@ -291,43 +300,60 @@ export function KnowledgeScreen(): ReactElement {
                     No results found.
                   </p>
                 ) : (
-                  <div className="space-y-2">
-                    {results.map((r) => (
-                      <button
-                        key={r.citation.chunkId}
-                        onClick={() => setSelectedResult(r)}
-                        className={[
-                          'w-full rounded-xl border px-4 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500',
-                          selectedResult?.citation.chunkId === r.citation.chunkId
-                            ? 'border-violet-500/40 bg-violet-500/10'
-                            : 'border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04]',
-                        ].join(' ')}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <p className="text-sm font-medium text-[var(--color-text-primary)]">
-                            {r.doc.title}
+                  <AnimatePresence mode="wait">
+                    <motion.div
+                      key={query}
+                      className="space-y-2"
+                      variants={staggerListVariants}
+                      initial="hidden"
+                      animate="visible"
+                    >
+                      {results.map((r) => (
+                        <motion.button
+                          key={r.citation.chunkId}
+                          variants={staggerItemVariants}
+                          whileHover={{ scale: 1.01, y: -1 }}
+                          whileTap={{ scale: 0.99 }}
+                          onClick={() => setSelectedResult(r)}
+                          className={[
+                            'w-full rounded-xl border px-4 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500',
+                            selectedResult?.citation.chunkId === r.citation.chunkId
+                              ? 'border-violet-500/40 bg-violet-500/10'
+                              : 'border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04]',
+                          ].join(' ')}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-sm font-medium text-[var(--color-text-primary)]">
+                              {r.doc.title}
+                            </p>
+                            <span className="shrink-0 text-[10px] font-mono text-[var(--color-text-tertiary)]">
+                              {(r.score * 100).toFixed(0)}%
+                            </span>
+                          </div>
+                          {r.citation.headingPath && (
+                            <p className="text-xs text-[var(--color-text-tertiary)]">
+                              {r.citation.headingPath}
+                            </p>
+                          )}
+                          <p className="mt-1.5 line-clamp-2 text-xs text-[var(--color-text-secondary)]">
+                            {r.citation.text}
                           </p>
-                          <span className="shrink-0 text-[10px] font-mono text-[var(--color-text-tertiary)]">
-                            {(r.score * 100).toFixed(0)}%
-                          </span>
-                        </div>
-                        {r.citation.headingPath && (
-                          <p className="text-xs text-[var(--color-text-tertiary)]">
-                            {r.citation.headingPath}
-                          </p>
-                        )}
-                        <p className="mt-1.5 line-clamp-2 text-xs text-[var(--color-text-secondary)]">
-                          {r.citation.text}
-                        </p>
-                      </button>
-                    ))}
-                  </div>
+                        </motion.button>
+                      ))}
+                    </motion.div>
+                  </AnimatePresence>
                 )
               ) : (
-                <div className="space-y-1">
+                <motion.div
+                  className="space-y-1"
+                  variants={staggerListVariants}
+                  initial="hidden"
+                  animate="visible"
+                >
                   {docs.map((d) => (
-                    <div
+                    <motion.div
                       key={d.id}
+                      variants={staggerItemVariants}
                       className="flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-white/[0.03] transition"
                     >
                       <FileText className="h-4 w-4 shrink-0 text-[var(--color-text-tertiary)]" />
@@ -342,7 +368,7 @@ export function KnowledgeScreen(): ReactElement {
                       <span className="shrink-0 text-[10px] uppercase text-[var(--color-text-tertiary)]">
                         {d.kind}
                       </span>
-                    </div>
+                    </motion.div>
                   ))}
                   {docs.length === 0 && (
                     <EmptyState
@@ -351,7 +377,7 @@ export function KnowledgeScreen(): ReactElement {
                       description="Create a Space, point it at a folder, and click Reindex to start building your knowledge base."
                     />
                   )}
-                </div>
+                </motion.div>
               )}
             </div>
 

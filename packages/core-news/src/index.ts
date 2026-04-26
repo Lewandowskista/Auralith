@@ -6,6 +6,18 @@ export {
   fetchAndIngest,
   summarizePending,
   clusterTopic,
+  fetchFullContent,
   type PipelineOpts,
 } from './pipeline'
-export { SUMMARIZE_ITEM_PROMPT, ANALYZE_ITEM_PROMPT, CLUSTER_LABEL_PROMPT } from './prompts'
+export { fetchArticleContent, type ArticleFetchResult, type ArticleFetchOpts } from './article-fetcher'
+export {
+  SUMMARIZE_ITEM_PROMPT,
+  ANALYZE_ITEM_PROMPT,
+  CLUSTER_LABEL_PROMPT,
+  DIGEST_PROMPT,
+  DigestOutputSchema,
+  buildSingleArticleContext,
+  buildDigestContext,
+  type DigestOutput,
+  type DigestArticle,
+} from './prompts'

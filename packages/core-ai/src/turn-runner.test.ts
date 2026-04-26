@@ -11,10 +11,13 @@ const weatherForecastTool: ToolManifestEntry = {
 
 function fakeClient(responses: string[]): OllamaClient {
   let index = 0
+  const nextResponse = () => responses[index++] ?? '{"type":"speak","text":"Done."}'
   return {
-    generate: async (_opts: GenerateOpts) =>
-      responses[index++] ?? '{"type":"speak","text":"Done."}',
-  } as OllamaClient
+    generate: async (_opts: GenerateOpts) => nextResponse(),
+    stream: async function* (_opts: GenerateOpts) {
+      yield nextResponse()
+    },
+  } as unknown as OllamaClient
 }
 
 describe('runTurn structured output parsing', () => {

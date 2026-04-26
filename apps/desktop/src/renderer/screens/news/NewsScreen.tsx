@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import type { ReactElement } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { staggerListVariants, staggerItemVariants } from '@auralith/design-system'
 import {
   Newspaper,
   Layers,
@@ -290,14 +291,16 @@ export function NewsScreen(): ReactElement {
             {[{ id: null, name: 'All' }, ...topics].map((t) => {
               const isActive = t.id === null ? activeTopic === null : activeTopic?.id === t.id
               return (
-                <button
+                <motion.button
                   key={t.id ?? 'all'}
+                  whileHover={{ scale: 1.04 }}
+                  whileTap={{ scale: 0.96 }}
                   onClick={() =>
                     setActiveTopic(
                       t.id === null ? null : (topics.find((x) => x.id === t.id) ?? null),
                     )
                   }
-                  className="shrink-0 transition-all focus-visible:outline-none"
+                  className="shrink-0 focus-visible:outline-none"
                   style={{
                     padding: '5px 14px',
                     borderRadius: 99,
@@ -312,7 +315,7 @@ export function NewsScreen(): ReactElement {
                   }}
                 >
                   {t.name}
-                </button>
+                </motion.button>
               )
             })}
           </div>
@@ -359,18 +362,24 @@ export function NewsScreen(): ReactElement {
           <div className="flex-1 overflow-y-auto p-6">
             <div className="flex flex-col gap-3 max-w-[720px] mx-auto">
               {clusters.length === 0 && rawItems.length > 0 ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <motion.div
+                  className="grid grid-cols-1 sm:grid-cols-2 gap-3"
+                  variants={staggerListVariants}
+                  initial="hidden"
+                  animate="visible"
+                >
                   {rawItems.map((item) => (
-                    <NewsItemCard
-                      key={item.id}
-                      item={item}
-                      variant="standard"
-                      onSelect={(i) => setActiveItem(activeItem?.id === i.id ? null : i)}
-                      onToggleSave={handleToggleSave}
-                      onMarkRead={handleMarkRead}
-                    />
+                    <motion.div key={item.id} variants={staggerItemVariants}>
+                      <NewsItemCard
+                        item={item}
+                        variant="standard"
+                        onSelect={(i) => setActiveItem(activeItem?.id === i.id ? null : i)}
+                        onToggleSave={handleToggleSave}
+                        onMarkRead={handleMarkRead}
+                      />
+                    </motion.div>
                   ))}
-                </div>
+                </motion.div>
               ) : clusters.length === 0 ? (
                 <div className="flex h-full items-center justify-center py-20">
                   <div className="text-center">
@@ -385,86 +394,95 @@ export function NewsScreen(): ReactElement {
                   </div>
                 </div>
               ) : (
-                clusters.map((c) => (
-                  <div key={c.id}>
-                    <button
-                      onClick={() => setActiveCluster(activeCluster?.id === c.id ? null : c)}
-                      className="w-full text-left transition-all"
-                      style={{
-                        padding: '14px 16px',
-                        borderRadius: 14,
-                        border: `1px solid ${activeCluster?.id === c.id ? 'var(--color-border-accent)' : 'var(--color-border-hairline)'}`,
-                        background:
-                          activeCluster?.id === c.id
-                            ? 'rgba(139,92,246,0.08)'
-                            : 'rgba(20,20,28,0.80)',
-                        backdropFilter: 'blur(8px)',
-                        WebkitBackdropFilter: 'blur(8px)',
-                        cursor: 'default',
-                        display: 'flex',
-                        gap: 12,
-                      }}
-                      onMouseEnter={(e) => {
-                        if (activeCluster?.id !== c.id)
-                          e.currentTarget.style.borderColor = 'var(--color-border-subtle)'
-                      }}
-                      onMouseLeave={(e) => {
-                        if (activeCluster?.id !== c.id)
-                          e.currentTarget.style.borderColor = 'var(--color-border-hairline)'
-                      }}
-                    >
-                      <div className="flex-1 min-w-0">
-                        <div
-                          className="text-sm font-medium leading-snug mb-1.5"
-                          style={{ color: 'var(--color-text-primary)' }}
-                        >
-                          {renderMarkdown(c.summary)}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Layers
-                            className="h-3 w-3"
-                            style={{ color: 'var(--color-text-tertiary)' }}
-                          />
-                          <span
-                            className="text-[11px]"
-                            style={{ color: 'var(--color-text-tertiary)' }}
+                <motion.div
+                  className="flex flex-col gap-3"
+                  variants={staggerListVariants}
+                  initial="hidden"
+                  animate="visible"
+                >
+                  {clusters.map((c) => (
+                    <motion.div key={c.id} variants={staggerItemVariants}>
+                      <button
+                        onClick={() => setActiveCluster(activeCluster?.id === c.id ? null : c)}
+                        className="w-full text-left transition-all"
+                        style={{
+                          padding: '14px 16px',
+                          borderRadius: 14,
+                          border: `1px solid ${activeCluster?.id === c.id ? 'var(--color-border-accent)' : 'var(--color-border-hairline)'}`,
+                          background:
+                            activeCluster?.id === c.id
+                              ? 'rgba(139,92,246,0.08)'
+                              : 'rgba(20,20,28,0.80)',
+                          backdropFilter: 'blur(8px)',
+                          WebkitBackdropFilter: 'blur(8px)',
+                          cursor: 'default',
+                          display: 'flex',
+                          gap: 12,
+                        }}
+                        onMouseEnter={(e) => {
+                          if (activeCluster?.id !== c.id)
+                            e.currentTarget.style.borderColor = 'var(--color-border-subtle)'
+                        }}
+                        onMouseLeave={(e) => {
+                          if (activeCluster?.id !== c.id)
+                            e.currentTarget.style.borderColor = 'var(--color-border-hairline)'
+                        }}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div
+                            className="text-sm font-medium leading-snug mb-1.5"
+                            style={{ color: 'var(--color-text-primary)' }}
                           >
-                            {c.itemCount} articles · {timeAgo(c.createdAt)}
-                          </span>
-                        </div>
-                      </div>
-                      <ChevronRight
-                        className={`h-4 w-4 shrink-0 transition-transform ${activeCluster?.id === c.id ? 'rotate-90' : ''}`}
-                        style={{ color: 'var(--color-text-tertiary)', marginTop: 2 }}
-                      />
-                    </button>
-
-                    <AnimatePresence>
-                      {activeCluster?.id === c.id && (
-                        <motion.div
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: 'auto' }}
-                          exit={{ opacity: 0, height: 0 }}
-                          transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
-                          className="overflow-hidden"
-                        >
-                          <div className="space-y-1.5 mt-2 pl-4">
-                            {items.map((item, index) => (
-                              <NewsItemCard
-                                key={item.id}
-                                item={item}
-                                variant={index === 0 ? 'featured' : 'compact'}
-                                onSelect={(i) => setActiveItem(activeItem?.id === i.id ? null : i)}
-                                onToggleSave={handleToggleSave}
-                                onMarkRead={handleMarkRead}
-                              />
-                            ))}
+                            {renderMarkdown(c.summary)}
                           </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                ))
+                          <div className="flex items-center gap-2">
+                            <Layers
+                              className="h-3 w-3"
+                              style={{ color: 'var(--color-text-tertiary)' }}
+                            />
+                            <span
+                              className="text-[11px]"
+                              style={{ color: 'var(--color-text-tertiary)' }}
+                            >
+                              {c.itemCount} articles · {timeAgo(c.createdAt)}
+                            </span>
+                          </div>
+                        </div>
+                        <ChevronRight
+                          className={`h-4 w-4 shrink-0 transition-transform ${activeCluster?.id === c.id ? 'rotate-90' : ''}`}
+                          style={{ color: 'var(--color-text-tertiary)', marginTop: 2 }}
+                        />
+                      </button>
+
+                      <AnimatePresence>
+                        {activeCluster?.id === c.id && (
+                          <motion.div
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: 'auto' }}
+                            exit={{ opacity: 0, height: 0 }}
+                            transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
+                            className="overflow-hidden"
+                          >
+                            <div className="space-y-1.5 mt-2 pl-4">
+                              {items.map((item, index) => (
+                                <NewsItemCard
+                                  key={item.id}
+                                  item={item}
+                                  variant={index === 0 ? 'featured' : 'compact'}
+                                  onSelect={(i) =>
+                                    setActiveItem(activeItem?.id === i.id ? null : i)
+                                  }
+                                  onToggleSave={handleToggleSave}
+                                  onMarkRead={handleMarkRead}
+                                />
+                              ))}
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </motion.div>
+                  ))}
+                </motion.div>
               )}
             </div>
           </div>

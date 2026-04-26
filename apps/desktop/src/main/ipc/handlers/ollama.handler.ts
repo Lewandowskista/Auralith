@@ -6,7 +6,16 @@ import {
   OllamaTestFeatureParamsSchema,
   OllamaGetConfigParamsSchema,
 } from '@auralith/core-domain'
-import { OllamaClient, getModelRouter, type ModelConfig } from '@auralith/core-ai'
+import {
+  OllamaClient,
+  getModelRouter,
+  getJsonReliabilityStats,
+  checkModelHealth,
+  formatMissingModelHints,
+  MODEL_PRESETS,
+  type ModelConfig,
+  type ModelPresetName,
+} from '@auralith/core-ai'
 import type { DbBundle } from '@auralith/core-db'
 import { createSettingsRepo } from '@auralith/core-db'
 import { z } from 'zod'
@@ -45,11 +54,24 @@ export function registerOllamaHandlers(bundle: DbBundle): void {
 
   registerHandler('ollama.getConfig', async (params) => {
     OllamaGetConfigParamsSchema.parse(params)
+    // Prefer live router values so the UI reflects any preset/override change made
+    // this session, not stale persisted strings from a previous preset.
+    let live: ModelConfig | null = null
+    try {
+      live = getModelRouter().getConfig()
+    } catch {
+      /* router not yet up */
+    }
     return {
       url: settings.get('ollama.url', z.string()) ?? 'http://localhost:11434',
-      chatModel: settings.get('ollama.chatModel', z.string()) ?? 'phi4-mini:3.8b',
-      embedModel: settings.get('ollama.embedModel', z.string()) ?? 'nomic-embed-text',
-      classifierModel: settings.get('ollama.classifierModel', z.string()) ?? 'nomic-embed-text',
+      chatModel: live?.chat ?? settings.get('ollama.chatModel', z.string()) ?? 'qwen3:8b',
+      embedModel:
+        live?.embed ?? settings.get('ollama.embedModel', z.string()) ?? 'nomic-embed-text',
+      classifierModel:
+        live?.classifier ?? settings.get('ollama.classifierModel', z.string()) ?? 'phi4-mini:3.8b',
+      summarizeModel: live?.summarize ?? 'phi4-mini:3.8b',
+      extractModel: live?.extract ?? 'phi4-mini:3.8b',
+      agentModel: live?.agent ?? 'qwen3:8b',
     }
   })
 
@@ -66,10 +88,59 @@ export function registerOllamaHandlers(bundle: DbBundle): void {
   registerHandler('ollama.getModelRouting', async () => {
     try {
       const router = getModelRouter()
-      return { config: router.getConfig(), defaults: router.getDefaultConfig() }
+      return {
+        config: router.getConfig(),
+        defaults: router.getDefaultConfig(),
+        activePreset: router.getActivePreset(),
+        presets: router.getPresets(),
+      }
     } catch {
-      return { config: null, defaults: null }
+      return { config: null, defaults: null, activePreset: null, presets: [] }
     }
+  })
+
+  registerHandler('ollama.applyPreset', async (params) => {
+    const { preset } = z.object({ preset: z.enum(['fast', 'balanced', 'quality']) }).parse(params)
+    try {
+      const router = getModelRouter()
+      router.applyPreset(preset as ModelPresetName)
+      // Persist as individual role overrides so settings survive restarts
+      const config = router.getConfig()
+      for (const [role, model] of Object.entries(config)) {
+        settings.set(`ollama.modelRouting.${role}`, model)
+      }
+      settings.set('ollama.activePreset', preset)
+      return { applied: true, config }
+    } catch {
+      return { applied: false, config: null }
+    }
+  })
+
+  registerHandler('ollama.getPresets', async () => {
+    return { presets: Object.values(MODEL_PRESETS) }
+  })
+
+  registerHandler('ollama.checkModelHealth', async () => {
+    try {
+      const router = getModelRouter()
+      const client = router.getClient()
+      const config = router.getConfig()
+      const report = await checkModelHealth(client, config)
+      const hints = formatMissingModelHints(report)
+      return { ...report, hints }
+    } catch (err) {
+      return {
+        installed: [],
+        missing: [],
+        pullCommands: [],
+        ollamaReachable: false,
+        hints: err instanceof Error ? err.message : 'Unknown error',
+      }
+    }
+  })
+
+  registerHandler('ollama.getJsonReliabilityStats', async () => {
+    return { stats: getJsonReliabilityStats() }
   })
 
   registerHandler('ollama.saveModelRouting', async (params) => {

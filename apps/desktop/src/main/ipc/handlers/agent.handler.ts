@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { registerHandler } from '../router'
 import type { DbBundle } from '@auralith/core-db'
 import type { OllamaClient } from '@auralith/core-ai'
-import { runAgentLoop } from '@auralith/core-ai'
+import { runAgentLoop, getAiQueue } from '@auralith/core-ai'
 import { listToolsForModel, executeTool } from '@auralith/core-tools'
 import type { ExecutorDeps } from '@auralith/core-tools'
 import type Database from 'better-sqlite3'
@@ -94,6 +94,16 @@ export function registerAgentHandlers(): void {
     cancelFlags.set(runId, false)
     persistRunStart(sqlite, runId, sessionId, '{}')
 
+    // Signal the AI queue so background news/briefing jobs don't compete
+    // with the agent while it is running (can take up to 3 minutes).
+    let agentQueue = null as ReturnType<typeof getAiQueue> | null
+    try {
+      agentQueue = getAiQueue()
+    } catch {
+      /* queue not initialized */
+    }
+    agentQueue?.beginForegroundAiTask()
+
     void runAgentLoop(runId, sessionId, goal, {
       chatClient,
       chatModel,
@@ -119,6 +129,8 @@ export function registerAgentHandlers(): void {
             state.error,
           )
           cancelFlags.delete(runId)
+          agentQueue?.endForegroundAiTask()
+          agentQueue = null // prevent double-release on catch path
         }
       },
       executeTool: async (toolId, params) => {
@@ -148,6 +160,7 @@ export function registerAgentHandlers(): void {
         err instanceof Error ? err.message : 'Unknown error',
       )
       cancelFlags.delete(runId)
+      agentQueue?.endForegroundAiTask()
     })
 
     return { runId, sessionId }

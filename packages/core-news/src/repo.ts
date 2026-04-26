@@ -11,6 +11,7 @@ import {
   desc,
   count,
   isNull,
+  inArray,
   lt,
 } from '@auralith/core-db'
 import type { RssFeedItem } from './rss'
@@ -194,6 +195,23 @@ export function createNewsRepo(db: DbClient) {
       .all()
   }
 
+  function getItemsNeedingFullContent(limit = 10) {
+    return db
+      .select()
+      .from(newsItems)
+      .where(isNull(newsItems.fullContentFetchedAt))
+      .orderBy(desc(newsItems.fetchedAt))
+      .limit(limit)
+      .all()
+  }
+
+  function setFullContent(itemId: string, fullContent: string | null): void {
+    db.update(newsItems)
+      .set({ fullContent, fullContentFetchedAt: new Date() })
+      .where(eq(newsItems.id, itemId))
+      .run()
+  }
+
   // --- Clusters ---
   function listClusters(opts: { topicId?: string; limit?: number; offset?: number } = {}) {
     const conditions = opts.topicId ? [eq(newsClusters.topicId, opts.topicId)] : []
@@ -229,6 +247,27 @@ export function createNewsRepo(db: DbClient) {
     return row?.n ?? 0
   }
 
+  function getClusterItemCounts(clusterIds: string[]): Map<string, number> {
+    if (clusterIds.length === 0) return new Map()
+    const rows = db
+      .select({ clusterId: newsItems.clusterId, n: count() })
+      .from(newsItems)
+      .where(inArray(newsItems.clusterId, clusterIds))
+      .groupBy(newsItems.clusterId)
+      .all()
+    return new Map(rows.map((r) => [r.clusterId ?? '', r.n]))
+  }
+
+  function getFeedsByIds(ids: string[]): Map<string, string> {
+    if (ids.length === 0) return new Map()
+    const rows = db
+      .select({ id: newsFeeds.id, title: newsFeeds.title })
+      .from(newsFeeds)
+      .where(inArray(newsFeeds.id, ids))
+      .all()
+    return new Map(rows.map((r) => [r.id, r.title]))
+  }
+
   function countSavedOlderThan(ms: number): number {
     const cutoff = new Date(Date.now() - ms)
     const [row] = db
@@ -240,7 +279,6 @@ export function createNewsRepo(db: DbClient) {
   }
 
   function getRecentUnclusteredItems(topicId: string, limit = 50) {
-    // Items from feeds linked to this topic that have no cluster assigned
     const feedIds = db
       .select({ feedId: newsTopicFeeds.feedId })
       .from(newsTopicFeeds)
@@ -253,17 +291,10 @@ export function createNewsRepo(db: DbClient) {
     return db
       .select()
       .from(newsItems)
-      .where(
-        and(
-          isNull(newsItems.clusterId),
-          // drizzle inArray not re-exported — use manual filter post-query
-        ),
-      )
+      .where(and(isNull(newsItems.clusterId), inArray(newsItems.feedId, feedIds)))
       .orderBy(desc(newsItems.fetchedAt))
-      .limit(limit * 3)
+      .limit(limit)
       .all()
-      .filter((i) => feedIds.includes(i.feedId))
-      .slice(0, limit)
   }
 
   return {
@@ -287,10 +318,14 @@ export function createNewsRepo(db: DbClient) {
     setSummary,
     setAnalysis,
     getItemsNeedingSummary,
+    getItemsNeedingFullContent,
+    setFullContent,
     getRecentUnclusteredItems,
     listClusters,
     createCluster,
     assignCluster,
     getClusterItemCount,
+    getClusterItemCounts,
+    getFeedsByIds,
   }
 }

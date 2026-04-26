@@ -7,6 +7,7 @@ export const voiceTranscripts = sqliteTable('voice_transcripts', {
   text: text('text').notNull(),
   routedTo: text('routed_to'),
   sessionId: text('session_id'),
+  voiceConversationId: text('voice_conversation_id'),
 })
 
 export const voiceModels = sqliteTable('voice_models', {

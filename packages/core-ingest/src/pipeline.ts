@@ -12,6 +12,10 @@ import { parseHtml } from './parsers/html'
 import { parseEpub } from './parsers/epub'
 import { chunkText } from './chunker'
 
+/** Current pipeline version — bump this when chunking or summarisation logic changes
+ *  so the reindex job can detect stale docs and re-process them. */
+export const PIPELINE_VERSION = 1
+
 export type IngestResult =
   | { status: 'indexed'; docId: string; chunkCount: number }
   | { status: 'skipped'; docId: string; reason: 'unchanged' }
@@ -41,6 +45,8 @@ export async function ingestFile(
     spaceId?: string
     sqlite?: Database.Database
     onChunksReady?: (docId: string, chunkTexts: string[]) => Promise<void>
+    /** When provided, generates a doc-level summary and stores it in docs.summary */
+    onSummarize?: (docId: string, text: string) => Promise<void>
   } = {},
 ): Promise<IngestResult> {
   const kind = detectKind(filePath)
@@ -114,6 +120,7 @@ export async function ingestFile(
         hash,
         indexedAt: now,
         spaceId: opts.spaceId ?? null,
+        pipelineVersion: PIPELINE_VERSION,
       })
       .where(eq(docs.id, docId))
       .run()
@@ -130,6 +137,7 @@ export async function ingestFile(
         indexedAt: now,
         spaceId: opts.spaceId ?? null,
         redactedFlags: '{}',
+        pipelineVersion: PIPELINE_VERSION,
       })
       .run()
   }
@@ -177,6 +185,11 @@ export async function ingestFile(
       docId,
       rawChunks.map((c) => c.text),
     )
+  }
+
+  // Fire-and-forget doc summarisation (queued as background AI task by the caller)
+  if (opts.onSummarize) {
+    void opts.onSummarize(docId, parsed.text)
   }
 
   return { status: 'indexed', docId, chunkCount: rawChunks.length }

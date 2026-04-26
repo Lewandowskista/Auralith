@@ -1,10 +1,18 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { ReactElement } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Mic, MicOff, X, Loader2 } from 'lucide-react'
+import { Mic, MicOff, X, Loader2, XCircle } from 'lucide-react'
 import { createPortal } from 'react-dom'
 
-type VoiceState = 'idle' | 'listening' | 'transcribing' | 'speaking'
+const METER_BARS = 10
+
+type VoiceState =
+  | 'idle'
+  | 'listening'
+  | 'transcribing'
+  | 'thinking'
+  | 'speaking'
+  | 'follow-up-listening'
 
 type VoiceHudProps = {
   onCancel?: (sessionId: string) => void
@@ -15,19 +23,57 @@ export function VoiceHud({ onCancel }: VoiceHudProps): ReactElement {
   const [partialText, setPartialText] = useState('')
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
-  const animFrameRef = useRef<number | null>(null)
-
-  // Waveform bars state (animated during listening)
-  const [bars] = useState(() => Array.from({ length: 9 }, (_, i) => i))
+  const [micLevel, setMicLevel] = useState(0)
+  const [conversationActive, setConversationActive] = useState(false)
+  const [followUpRemainingMs, setFollowUpRemainingMs] = useState(0)
+  const followUpExpiresAtRef = useRef<number>(0)
+  const followUpTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
     const unsubState = window.auralith.on('voice:state', (data) => {
-      const { state: s, sessionId: sid } = data as { state: VoiceState; sessionId?: string }
+      const {
+        state: s,
+        sessionId: sid,
+        conversationActive: ca,
+        followUpExpiresAt,
+      } = data as {
+        state: VoiceState
+        sessionId?: string
+        conversationActive?: boolean
+        followUpExpiresAt?: number
+      }
       setState(s)
       if (sid) setSessionId(sid)
+      if (ca !== undefined) setConversationActive(ca)
       if (s === 'idle') {
         setPartialText('')
         setErrorMsg(null)
+        setMicLevel(0)
+        setConversationActive(false)
+        setFollowUpRemainingMs(0)
+        if (followUpTimerRef.current) {
+          clearInterval(followUpTimerRef.current)
+          followUpTimerRef.current = null
+        }
+      }
+      if (s === 'follow-up-listening' && followUpExpiresAt) {
+        followUpExpiresAtRef.current = followUpExpiresAt
+        setFollowUpRemainingMs(Math.max(0, followUpExpiresAt - Date.now()))
+        if (followUpTimerRef.current) clearInterval(followUpTimerRef.current)
+        followUpTimerRef.current = setInterval(() => {
+          const remaining = Math.max(0, followUpExpiresAtRef.current - Date.now())
+          setFollowUpRemainingMs(remaining)
+          if (remaining === 0 && followUpTimerRef.current) {
+            clearInterval(followUpTimerRef.current)
+            followUpTimerRef.current = null
+          }
+        }, 200)
+      } else if (s !== 'follow-up-listening') {
+        if (followUpTimerRef.current) {
+          clearInterval(followUpTimerRef.current)
+          followUpTimerRef.current = null
+        }
+        setFollowUpRemainingMs(0)
       }
     })
 
@@ -47,11 +93,18 @@ export function VoiceHud({ onCancel }: VoiceHudProps): ReactElement {
       setState('idle')
     })
 
+    const unsubLevel = window.auralith.on('voice:level', (data) => {
+      const { level } = data as { level: number }
+      setMicLevel(level)
+    })
+
     return () => {
       unsubState()
       unsubPartial()
       unsubFinal()
       unsubError()
+      unsubLevel()
+      if (followUpTimerRef.current) clearInterval(followUpTimerRef.current)
     }
   }, [])
 
@@ -63,12 +116,19 @@ export function VoiceHud({ onCancel }: VoiceHudProps): ReactElement {
     setState('idle')
     setPartialText('')
     setSessionId(null)
-    if (animFrameRef.current !== null) {
-      cancelAnimationFrame(animFrameRef.current)
-    }
+    setMicLevel(0)
   }, [sessionId, onCancel])
 
+  const handleEndConversation = useCallback(() => {
+    void window.auralith.invoke('voice.endConversation', {})
+    setState('idle')
+    setConversationActive(false)
+    setPartialText('')
+    setMicLevel(0)
+  }, [])
+
   const visible = state !== 'idle'
+  const followUpSec = Math.ceil(followUpRemainingMs / 1000)
 
   const hudContent = (
     <AnimatePresence>
@@ -87,13 +147,17 @@ export function VoiceHud({ onCancel }: VoiceHudProps): ReactElement {
               ? 'Listening…'
               : state === 'transcribing'
                 ? 'Transcribing…'
-                : state === 'speaking'
-                  ? 'Speaking…'
-                  : ''
+                : state === 'thinking'
+                  ? 'Thinking…'
+                  : state === 'speaking'
+                    ? 'Speaking…'
+                    : state === 'follow-up-listening'
+                      ? 'Listening for follow-up…'
+                      : ''
           }
         >
           <div
-            className="flex items-center gap-3 px-4 py-3 rounded-2xl shadow-2xl min-w-[240px] max-w-[480px]"
+            className="flex items-center gap-3 px-4 py-3 rounded-2xl shadow-2xl min-w-[240px] max-w-[520px]"
             style={{
               background: 'rgba(14, 14, 20, 0.92)',
               backdropFilter: 'blur(24px)',
@@ -102,18 +166,36 @@ export function VoiceHud({ onCancel }: VoiceHudProps): ReactElement {
           >
             {/* State icon */}
             <div className="shrink-0">
-              {state === 'listening' && (
+              {(state === 'listening' || state === 'follow-up-listening') && (
                 <motion.div
-                  animate={{ scale: [1, 1.15, 1] }}
-                  transition={{ duration: 1, repeat: Infinity, ease: 'easeInOut' }}
+                  animate={
+                    state === 'follow-up-listening'
+                      ? { scale: [1, 1.08, 1], opacity: [0.5, 1, 0.5] }
+                      : { scale: [1, 1.15, 1] }
+                  }
+                  transition={
+                    state === 'follow-up-listening'
+                      ? { duration: 2, repeat: Infinity, ease: 'easeInOut' }
+                      : { duration: 1, repeat: Infinity, ease: 'easeInOut' }
+                  }
                   className="flex items-center justify-center w-8 h-8 rounded-full bg-violet-500/20"
                 >
-                  <Mic size={16} className="text-violet-400" />
+                  <Mic
+                    size={16}
+                    className={
+                      state === 'follow-up-listening' ? 'text-violet-300' : 'text-violet-400'
+                    }
+                  />
                 </motion.div>
               )}
               {state === 'transcribing' && (
                 <div className="flex items-center justify-center w-8 h-8 rounded-full bg-amber-500/20">
                   <Loader2 size={16} className="text-amber-400 animate-spin" />
+                </div>
+              )}
+              {state === 'thinking' && (
+                <div className="flex items-center justify-center w-8 h-8 rounded-full bg-blue-500/20">
+                  <Loader2 size={16} className="text-blue-400 animate-spin" />
                 </div>
               )}
               {state === 'speaking' && (
@@ -131,22 +213,44 @@ export function VoiceHud({ onCancel }: VoiceHudProps): ReactElement {
             <div className="flex-1 min-w-0">
               {state === 'listening' && (
                 <div className="flex items-center gap-0.5 h-5">
-                  {bars.map((i) => (
-                    <motion.div
-                      key={i}
-                      className="w-0.5 rounded-full bg-violet-400"
-                      animate={{
-                        height: ['4px', `${8 + Math.random() * 12}px`, '4px'],
-                      }}
-                      transition={{
-                        duration: 0.5 + i * 0.07,
-                        repeat: Infinity,
-                        ease: 'easeInOut',
-                        delay: i * 0.04,
-                      }}
-                    />
-                  ))}
+                  {Array.from({ length: METER_BARS }, (_, i) => {
+                    const threshold = (i + 1) / METER_BARS
+                    const lit = micLevel >= threshold
+                    return (
+                      <div
+                        key={i}
+                        aria-hidden="true"
+                        className="w-0.5 rounded-full transition-all duration-75"
+                        style={{
+                          height: lit ? `${8 + i * 1.4}px` : '3px',
+                          background: lit
+                            ? i < 6
+                              ? 'rgb(139,92,246)'
+                              : i < 8
+                                ? 'rgb(167,139,250)'
+                                : 'rgb(196,181,253)'
+                            : 'rgba(139,92,246,0.2)',
+                        }}
+                      />
+                    )
+                  })}
+                  <div
+                    role="meter"
+                    aria-label="Microphone level"
+                    aria-valuenow={Math.round(micLevel * 100)}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    className="sr-only"
+                  />
                   <span className="ml-2 text-xs text-[#A6A6B3]">Listening…</span>
+                </div>
+              )}
+              {state === 'follow-up-listening' && (
+                <div className="flex flex-col gap-0.5">
+                  <p className="text-xs text-[#A6A6B3]">
+                    Listening for follow-up… <span className="text-[#6F6F80]">{followUpSec}s</span>
+                  </p>
+                  <p className="text-[10px] text-[#6F6F80]">Speak to continue or wait to end</p>
                 </div>
               )}
               {state === 'transcribing' && (
@@ -154,20 +258,35 @@ export function VoiceHud({ onCancel }: VoiceHudProps): ReactElement {
                   {partialText.length > 0 ? partialText : 'Transcribing…'}
                 </p>
               )}
+              {state === 'thinking' && <p className="text-sm text-[#A6A6B3]">Thinking…</p>}
               {state === 'speaking' && <p className="text-sm text-[#A6A6B3]">Speaking…</p>}
               <p className="text-[10px] text-[#6F6F80] mt-0.5">Audio is not recorded</p>
             </div>
 
-            {/* Cancel button — only shown when listening or transcribing */}
-            {(state === 'listening' || state === 'transcribing') && (
-              <button
-                onClick={handleCancel}
-                className="shrink-0 flex items-center justify-center w-6 h-6 rounded-full text-[#6F6F80] hover:text-[#F4F4F8] hover:bg-white/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
-                aria-label="Cancel voice input"
-              >
-                <X size={13} />
-              </button>
-            )}
+            {/* Action buttons */}
+            <div className="shrink-0 flex items-center gap-1">
+              {/* Cancel capture — only when listening or transcribing */}
+              {(state === 'listening' || state === 'transcribing') && (
+                <button
+                  onClick={handleCancel}
+                  className="flex items-center justify-center w-6 h-6 rounded-full text-[#6F6F80] hover:text-[#F4F4F8] hover:bg-white/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
+                  aria-label="Cancel voice input"
+                >
+                  <X size={13} />
+                </button>
+              )}
+              {/* End conversation — shown whenever conversation is active */}
+              {conversationActive && (
+                <button
+                  onClick={handleEndConversation}
+                  className="flex items-center justify-center w-6 h-6 rounded-full text-[#6F6F80] hover:text-red-400 hover:bg-red-500/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                  aria-label="End conversation"
+                  title="End conversation"
+                >
+                  <XCircle size={13} />
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Error toast */}

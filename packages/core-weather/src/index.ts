@@ -1,6 +1,7 @@
 export {
   fetchWeather,
   buildWeatherBriefing,
+  geocodeCity,
   wmoDescription,
   wmoAlertLevel,
   type CurrentWeather,
@@ -8,4 +9,5 @@ export {
   type HourlyForecast,
   type WeatherPayload,
   type AlertLevel,
+  type GeocodeResult,
 } from './open-meteo'

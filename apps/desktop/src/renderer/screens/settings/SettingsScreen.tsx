@@ -12,6 +12,8 @@ import {
   Cpu,
   Newspaper,
   Activity,
+  Brain,
+  Stethoscope,
 } from 'lucide-react'
 import { PermissionsSection } from './PermissionsSection'
 import { AuditSection } from './AuditSection'
@@ -24,6 +26,8 @@ import { LeisureSection } from './LeisureSection'
 import { OllamaSection } from './OllamaSection'
 import { NewsSection } from './NewsSection'
 import { ActivitySection } from './ActivitySection'
+import { KnowledgeSection } from './KnowledgeSection'
+import { DiagnosticsSection } from './DiagnosticsSection'
 
 type SettingsTab =
   | 'appearance'
@@ -33,6 +37,8 @@ type SettingsTab =
   | 'leisure'
   | 'news'
   | 'activity'
+  | 'knowledge'
+  | 'diagnostics'
   | 'permissions'
   | 'privacy'
   | 'audit'
@@ -46,6 +52,8 @@ const TABS: Array<{ id: SettingsTab; label: string; icon: ReactElement }> = [
   { id: 'leisure', label: 'Leisure', icon: <Coffee className="h-4 w-4" /> },
   { id: 'news', label: 'News', icon: <Newspaper className="h-4 w-4" /> },
   { id: 'activity', label: 'Activity', icon: <Activity className="h-4 w-4" /> },
+  { id: 'knowledge', label: 'Knowledge', icon: <Brain className="h-4 w-4" /> },
+  { id: 'diagnostics', label: 'Diagnostics', icon: <Stethoscope className="h-4 w-4" /> },
   { id: 'permissions', label: 'Permissions', icon: <Shield className="h-4 w-4" /> },
   { id: 'privacy', label: 'Privacy & Data', icon: <HardDrive className="h-4 w-4" /> },
   { id: 'audit', label: 'Audit Log', icon: <ClipboardList className="h-4 w-4" /> },
@@ -115,6 +123,8 @@ export function SettingsScreen(): ReactElement {
         {tab === 'leisure' && <LeisureSection />}
         {tab === 'news' && <NewsSection />}
         {tab === 'activity' && <ActivitySection />}
+        {tab === 'knowledge' && <KnowledgeSection />}
+        {tab === 'diagnostics' && <DiagnosticsSection />}
         {tab === 'permissions' && <PermissionsSection />}
         {tab === 'privacy' && <PrivacySection />}
         {tab === 'audit' && <AuditSection />}

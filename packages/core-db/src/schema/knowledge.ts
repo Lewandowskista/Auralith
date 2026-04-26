@@ -13,6 +13,8 @@ export const docs = sqliteTable('docs', {
   hash: text('hash').notNull(),
   indexedAt: integer('indexed_at', { mode: 'timestamp_ms' }),
   redactedFlags: text('redacted_flags').notNull().default('{}'),
+  summary: text('summary'),
+  pipelineVersion: integer('pipeline_version').notNull().default(0),
 })
 
 export const chunks = sqliteTable('chunks', {

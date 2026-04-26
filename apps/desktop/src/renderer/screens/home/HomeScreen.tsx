@@ -7,6 +7,8 @@ import {
   WidgetCard,
   Dialog,
   BarChart,
+  staggerListVariants,
+  staggerItemVariants,
   type BarChartDatum,
 } from '@auralith/design-system'
 import {
@@ -541,10 +543,16 @@ export function HomeScreen(): ReactElement {
         {suggestions.length === 0 ? (
           <p className="text-sm text-[var(--color-text-tertiary)]">Nothing pending right now.</p>
         ) : (
-          <div className="space-y-3">
+          <motion.div
+            className="space-y-3"
+            variants={staggerListVariants}
+            initial="hidden"
+            animate="visible"
+          >
             {suggestions.map((suggestion) => (
-              <div
+              <motion.div
                 key={suggestion.id}
+                variants={staggerItemVariants}
                 className="rounded-xl border border-[var(--color-border-hairline)] bg-[var(--color-bg-2)]/40 px-4 py-4"
               >
                 <div className="flex items-start justify-between gap-3">
@@ -598,9 +606,9 @@ export function HomeScreen(): ReactElement {
                     Dismiss
                   </button>
                 </div>
-              </div>
+              </motion.div>
             ))}
-          </div>
+          </motion.div>
         )}
       </WidgetCard>
     ),
@@ -657,21 +665,35 @@ export function HomeScreen(): ReactElement {
               </button>
             </div>
           ) : (
-            recentActivity.map((event) => (
-              <button key={event.id} onClick={() => navigateTo('activity')} className={ROW_CLS}>
-                <div className="min-w-0 flex-1">
-                  <p className="text-[11px] uppercase tracking-[0.12em] text-[var(--color-text-tertiary)]">
-                    {event.kind}
-                  </p>
-                  <p className="mt-1 truncate text-sm text-[var(--color-text-primary)]">
-                    {basename(event.path)}
-                  </p>
-                </div>
-                <span className="ml-3 text-xs text-[var(--color-text-tertiary)]">
-                  {formatTime(event.ts)}
-                </span>
-              </button>
-            ))
+            <motion.div
+              className="space-y-3"
+              variants={staggerListVariants}
+              initial="hidden"
+              animate="visible"
+            >
+              {recentActivity.map((event) => (
+                <motion.button
+                  key={event.id}
+                  variants={staggerItemVariants}
+                  whileHover={{ scale: 1.01, y: -1 }}
+                  whileTap={{ scale: 0.99 }}
+                  onClick={() => navigateTo('activity')}
+                  className={ROW_CLS}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[11px] uppercase tracking-[0.12em] text-[var(--color-text-tertiary)]">
+                      {event.kind}
+                    </p>
+                    <p className="mt-1 truncate text-sm text-[var(--color-text-primary)]">
+                      {basename(event.path)}
+                    </p>
+                  </div>
+                  <span className="ml-3 text-xs text-[var(--color-text-tertiary)]">
+                    {formatTime(event.ts)}
+                  </span>
+                </motion.button>
+              ))}
+            </motion.div>
           )}
         </div>
       </WidgetCard>
@@ -693,19 +715,33 @@ export function HomeScreen(): ReactElement {
               </button>
             </div>
           ) : (
-            clipboardItems.map((item) => (
-              <button key={item.id} onClick={() => navigateTo('activity')} className={ROW_BTN_CLS}>
-                <Clipboard className="mt-0.5 h-4 w-4 shrink-0 text-violet-300" />
-                <div className="min-w-0 flex-1">
-                  <p className="line-clamp-2 text-sm text-[var(--color-text-primary)]">
-                    {item.redacted ? 'Sensitive content was redacted.' : item.textValue}
-                  </p>
-                  <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-                    {item.charCount ?? 0} chars · {formatTime(item.ts)}
-                  </p>
-                </div>
-              </button>
-            ))
+            <motion.div
+              className="space-y-3"
+              variants={staggerListVariants}
+              initial="hidden"
+              animate="visible"
+            >
+              {clipboardItems.map((item) => (
+                <motion.button
+                  key={item.id}
+                  variants={staggerItemVariants}
+                  whileHover={{ scale: 1.01, y: -1 }}
+                  whileTap={{ scale: 0.99 }}
+                  onClick={() => navigateTo('activity')}
+                  className={ROW_BTN_CLS}
+                >
+                  <Clipboard className="mt-0.5 h-4 w-4 shrink-0 text-violet-300" />
+                  <div className="min-w-0 flex-1">
+                    <p className="line-clamp-2 text-sm text-[var(--color-text-primary)]">
+                      {item.redacted ? 'Sensitive content was redacted.' : item.textValue}
+                    </p>
+                    <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+                      {item.charCount ?? 0} chars · {formatTime(item.ts)}
+                    </p>
+                  </div>
+                </motion.button>
+              ))}
+            </motion.div>
           )}
         </div>
       </WidgetCard>
@@ -885,7 +921,18 @@ export function HomeScreen(): ReactElement {
           </AnimatePresence>
 
           <FadeRise delay={80}>
-            <WidgetGrid>{widgetOrder.map((widgetId) => widgetCards[widgetId])}</WidgetGrid>
+            <WidgetGrid>
+              {widgetOrder.map((widgetId, idx) => (
+                <motion.div
+                  key={widgetId}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2, delay: idx * 0.05, ease: [0.2, 0.8, 0.2, 1] }}
+                >
+                  {widgetCards[widgetId]}
+                </motion.div>
+              ))}
+            </WidgetGrid>
           </FadeRise>
         </div>
       </div>

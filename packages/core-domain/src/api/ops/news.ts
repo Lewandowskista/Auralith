@@ -28,22 +28,25 @@ const ClusterSchema = z.object({
 const NewsItemSchema = z.object({
   id: z.string(),
   feedId: z.string(),
+  sourceName: z.string().optional(),
   title: z.string(),
   url: z.string(),
   publishedAt: z.number().optional(),
+  rawText: z.string().optional(),
   summary: z.string().optional(),
   analysis: z.string().optional(),
   clusterId: z.string().optional(),
   fetchedAt: z.number(),
   readAt: z.number().optional(),
   saved: z.boolean(),
-  // M15: media fields
   imageUrl: z.string().optional(),
   videoUrl: z.string().optional(),
   mediaType: z.string().optional(),
   author: z.string().optional(),
   categories: z.array(z.string()).optional(),
   readingTimeMin: z.number().optional(),
+  fullContent: z.string().optional(),
+  fullContentFetchedAt: z.number().optional(),
 })
 
 export const NewsListTopicsParamsSchema = z.object({})

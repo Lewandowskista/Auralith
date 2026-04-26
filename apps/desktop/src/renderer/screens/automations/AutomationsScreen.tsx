@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { ReactElement } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { TabContent } from '@auralith/design-system'
 import {
   Plus,
   Play,
@@ -74,6 +75,7 @@ function triggerLabel(trigger: Routine['trigger']): string {
 
 export function AutomationsScreen(): ReactElement {
   const [tab, setTab] = useState<'mine' | 'browse'>('mine')
+  const prevTabRef = useRef<'mine' | 'browse'>('mine')
   const [routines, setRoutines] = useState<Routine[]>([])
   const [loading, setLoading] = useState(true)
   const [editorOpen, setEditorOpen] = useState(false)
@@ -180,7 +182,10 @@ export function AutomationsScreen(): ReactElement {
         {(['mine', 'browse'] as const).map((t) => (
           <button
             key={t}
-            onClick={() => setTab(t)}
+            onClick={() => {
+              prevTabRef.current = tab
+              setTab(t)
+            }}
             className="relative flex items-center gap-1.5 px-4 py-3 text-sm font-medium transition-colors"
             style={{
               color: tab === t ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
@@ -199,47 +204,52 @@ export function AutomationsScreen(): ReactElement {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto px-8 py-6">
-        {tab === 'browse' ? (
-          <MarketplacePanel
-            onInstalled={() => {
-              void loadRoutines()
-              setTab('mine')
-            }}
-          />
-        ) : loading ? (
-          <div className="flex items-center justify-center h-32">
-            <div className="h-1 w-16 overflow-hidden rounded-full bg-white/10">
-              <motion.div
-                className="h-full rounded-full bg-violet-500/60"
-                animate={{ x: ['-100%', '100%'] }}
-                transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+      <div className="flex-1 overflow-y-auto">
+        <TabContent tabKey={tab} direction={tab === 'browse' ? 1 : -1}>
+          <div className="px-8 py-6">
+            {tab === 'browse' ? (
+              <MarketplacePanel
+                onInstalled={() => {
+                  prevTabRef.current = 'browse'
+                  void loadRoutines()
+                  setTab('mine')
+                }}
               />
-            </div>
+            ) : loading ? (
+              <div className="flex items-center justify-center h-32">
+                <div className="h-1 w-16 overflow-hidden rounded-full bg-white/10">
+                  <motion.div
+                    className="h-full rounded-full bg-violet-500/60"
+                    animate={{ x: ['-100%', '100%'] }}
+                    transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+                  />
+                </div>
+              </div>
+            ) : routines.length === 0 ? (
+              <EmptyState onNew={() => setEditorOpen(true)} />
+            ) : (
+              <FadeRise>
+                <div data-testid="routines-list" className="space-y-3">
+                  {routines.map((r) => (
+                    <RoutineCard
+                      key={r.id}
+                      routine={r}
+                      running={runningId === r.id}
+                      onToggle={() => void handleToggleEnabled(r)}
+                      onRun={() => void handleRun(r)}
+                      onEdit={() => {
+                        setEditingRoutine(r)
+                        setEditorOpen(true)
+                      }}
+                      onDelete={() => void handleDelete(r.id)}
+                      onHistory={() => setHistoryFor(r)}
+                    />
+                  ))}
+                </div>
+              </FadeRise>
+            )}
           </div>
-        ) : routines.length === 0 ? (
-          <EmptyState onNew={() => setEditorOpen(true)} />
-        ) : (
-          <FadeRise>
-            <div data-testid="routines-list" className="space-y-3">
-              {routines.map((r) => (
-                <RoutineCard
-                  key={r.id}
-                  routine={r}
-                  running={runningId === r.id}
-                  onToggle={() => void handleToggleEnabled(r)}
-                  onRun={() => void handleRun(r)}
-                  onEdit={() => {
-                    setEditingRoutine(r)
-                    setEditorOpen(true)
-                  }}
-                  onDelete={() => void handleDelete(r.id)}
-                  onHistory={() => setHistoryFor(r)}
-                />
-              ))}
-            </div>
-          </FadeRise>
-        )}
+        </TabContent>
       </div>
 
       {/* Routine editor sheet */}
@@ -319,7 +329,9 @@ function RoutineCard({
       data-testid="routine-row"
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      className="group relative transition-colors"
+      whileHover={{ scale: 1.015, y: -1 }}
+      whileTap={{ scale: 0.98 }}
+      className="group relative"
       style={{
         borderRadius: 14,
         border: '1px solid var(--color-border-hairline)',
@@ -544,7 +556,6 @@ function MarketplacePanel({ onInstalled }: { onInstalled: () => void }): ReactEl
               return (
                 <motion.div
                   key={ex.id}
-                  layout
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.96 }}

@@ -9,6 +9,8 @@ type FolderRule = { path: string; spaceId: string }
 export type FileWatcherOpts = {
   eventsRepo: EventsRepo
   folderRules?: FolderRule[]
+  /** Called after each activity event is successfully persisted. */
+  onEventWritten?: (ev: ActivityEvent) => void
 }
 
 export class FileWatcher {
@@ -16,9 +18,11 @@ export class FileWatcher {
   private normalizer: EventNormalizer
   private eventsRepo: EventsRepo
   private watchedPaths = new Set<string>()
+  private onEventWritten?: (ev: ActivityEvent) => void
 
   constructor(opts: FileWatcherOpts) {
     this.eventsRepo = opts.eventsRepo
+    if (opts.onEventWritten) this.onEventWritten = opts.onEventWritten
     this.normalizer = new EventNormalizer({
       debounceMs: 500,
       renamePairWindowMs: 2000,
@@ -26,6 +30,7 @@ export class FileWatcher {
       onEvent: (ev: ActivityEvent) => {
         try {
           this.eventsRepo.writeEvent(ev)
+          this.onEventWritten?.(ev)
         } catch (err) {
           console.error('[watcher] writeEvent failed:', err)
         }

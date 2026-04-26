@@ -25,12 +25,39 @@ export const VoiceModelInfoSchema = z.object({
 })
 export type VoiceModelInfo = z.infer<typeof VoiceModelInfoSchema>
 
+export const TtsProviderSchema = z.enum(['piper', 'sapi'])
+export type TtsProvider = z.infer<typeof TtsProviderSchema>
+
+export const TtsVoiceQualitySchema = z.enum(['x_low', 'low', 'medium', 'high'])
+export type TtsVoiceQuality = z.infer<typeof TtsVoiceQualitySchema>
+
 export const TtsVoiceSchema = z.object({
   id: z.string(),
   name: z.string(),
   lang: z.string(),
+  provider: TtsProviderSchema.default('sapi'),
+  quality: TtsVoiceQualitySchema.optional(),
+  sampleRate: z.number().optional(),
+  installed: z.boolean().default(true),
+  licence: z.string().optional(),
 })
 export type TtsVoice = z.infer<typeof TtsVoiceSchema>
+
+export const PiperVoiceDownloadSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  lang: z.string(),
+  quality: TtsVoiceQualitySchema,
+  sampleRate: z.number(),
+  sizeBytes: z.number(),
+  urlOnnx: z.string(),
+  urlJson: z.string(),
+  sha256Onnx: z.string(),
+  sha256Json: z.string(),
+  licence: z.string(),
+  installed: z.boolean(),
+})
+export type PiperVoiceDownload = z.infer<typeof PiperVoiceDownloadSchema>
 
 export const VoiceStatusSchema = z.object({
   sttReady: z.boolean(),

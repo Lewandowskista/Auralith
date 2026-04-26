@@ -14,7 +14,9 @@
   "dependencies": {
     "@auralith/core-ai": "workspace:*",
     "@auralith/core-db": "workspace:*",
+    "@mozilla/readability": "^0.5.0",
     "fast-xml-parser": "^5.7.1",
+    "linkedom": "^0.18.0",
     "zod": "^4.3.6"
   }
 }

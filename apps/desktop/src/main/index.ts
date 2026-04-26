@@ -13,6 +13,8 @@ import {
   createAppUsageRepo,
   createCalendarEventsRepo,
   createAuditRepo,
+  createPromptCacheRepo,
+  createObservabilityRepo,
 } from '@auralith/core-db'
 import { createNewsRepo, runFullPipeline } from '@auralith/core-news'
 import {
@@ -21,6 +23,8 @@ import {
   initModelRouter,
   getModelRouter,
   initAiQueue,
+  createPromptCache,
+  flushReliabilityToRepo,
 } from '@auralith/core-ai'
 import { registerAssistantSpeakTool } from '@auralith/core-tools'
 import { SuggestionEngine } from '@auralith/core-suggest'
@@ -75,6 +79,8 @@ import { registerIngestHandlers, initIngestDeps } from './ipc/handlers/ingest.ha
 import { WebhookServer } from './routines/webhook-server'
 import { registerAgentHandlers, initAgentDeps } from './ipc/handlers/agent.handler'
 import { registerGraphHandlers, initGraphDeps } from './ipc/handlers/graph.handler'
+import { initObsDeps, registerObservabilityHandlers } from './ipc/handlers/observability.handler'
+import { setObservabilityRepo } from './ipc/router'
 import { setupConfirmationChannel, makeExecutorDeps } from './tools/confirmation'
 import { FileWatcher } from './watcher/file-watcher'
 import { initAppContextBroker } from './ai/app-context-setup'
@@ -248,6 +254,9 @@ app.whenReady().then(() => {
 
   const sqlite = new Database(join(dataDir, 'auralith.db'))
 
+  const obsRepo = createObservabilityRepo(sqlite)
+  setObservabilityRepo(obsRepo)
+
   const settings = createSettingsRepo(bundle.db)
   const eventsRepo = createEventsRepo(bundle.db)
   if (isE2E) {
@@ -287,7 +296,14 @@ app.whenReady().then(() => {
 
   const watchedFolders = settings.get('activity.watchedFolders', z.array(z.string())) ?? []
 
-  const fileWatcher = new FileWatcher({ eventsRepo })
+  const fileWatcher = new FileWatcher({
+    eventsRepo,
+    onEventWritten: () => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send('activity:updated')
+      }
+    },
+  })
   if (watchedFolders.length > 0) {
     fileWatcher.start(watchedFolders)
   }
@@ -320,6 +336,7 @@ app.whenReady().then(() => {
     embedClient: ollamaClient,
     embedModel: resolvedEmbedModel,
     executorDeps,
+    router,
   })
   // Initialize the app-aware context broker — injects weather, news, activity, etc. into prompts
   initAppContextBroker({
@@ -348,9 +365,9 @@ app.whenReady().then(() => {
   const voiceOrchestrator = new VoiceOrchestrator({
     settingsRepo: settings,
     sqlite,
-    sendToAssistant: async (text) => {
+    sendToAssistant: async (text, conversationId, onSpeakChunk) => {
       const win = BrowserWindow.getAllWindows()[0] ?? null
-      return sendVoiceMessage(text, win)
+      return sendVoiceMessage(text, win, conversationId, onSpeakChunk)
     },
     broadcast: (channel, data) => {
       const win = BrowserWindow.getAllWindows()[0]
@@ -358,7 +375,7 @@ app.whenReady().then(() => {
     },
   })
 
-  registerAssistantSpeakTool((text, voiceId, rate) => voiceOrchestrator.speak(text, voiceId, rate))
+  registerAssistantSpeakTool((text, voiceId) => voiceOrchestrator.speak(text, voiceId))
 
   const notesDir =
     settings.get('notes.directory', z.string()) ?? join(app.getPath('documents'), 'Auralith Notes')
@@ -381,25 +398,39 @@ app.whenReady().then(() => {
     void voiceOrchestrator.setEnabled(true)
   }
 
+  const broadcastFn = (channel: string, data: unknown) => {
+    const win = BrowserWindow.getAllWindows()[0]
+    win?.webContents.send(channel, data)
+  }
+
   initVoiceDeps({
-    getStatus: () => voiceOrchestrator.getStatus(),
+    getStatus: () => ({
+      ...voiceOrchestrator.getStatus(),
+      ttsUsingPiper: voiceOrchestrator.ttsUsingPiper,
+    }),
     getSettings: () => voiceOrchestrator.getSettings(),
     startCapture: () => voiceOrchestrator.startCapture(),
     stopCapture: (sessionId) => voiceOrchestrator.stopCapture(sessionId),
     pushAudioChunk: (sessionId, pcm16Base64) =>
       voiceOrchestrator.pushAudioChunk(sessionId, pcm16Base64),
     cancelCapture: (sessionId) => voiceOrchestrator.cancelCapture(sessionId),
-    speak: (text, voiceId, rate) => voiceOrchestrator.speak(text, voiceId, rate),
+    speak: (text, voiceId, lengthScale) => voiceOrchestrator.speak(text, voiceId, lengthScale),
     listTtsVoices: () => voiceOrchestrator.listTtsVoices(),
+    listAvailableTtsVoices: () => voiceOrchestrator.listAvailableTtsVoices(),
+    downloadTtsVoice: (voiceId, onProgress) =>
+      voiceOrchestrator.downloadTtsVoice(voiceId, onProgress),
+    deleteTtsVoice: (voiceId) => voiceOrchestrator.deleteTtsVoice(voiceId),
     listSttModels: () => voiceOrchestrator.listSttModels(),
     downloadSttModel: (modelId) => voiceOrchestrator.downloadSttModel(modelId),
     setEnabled: (enabled) => voiceOrchestrator.setEnabled(enabled),
     setPttBinding: async (binding) => ({
       conflict: voiceOrchestrator.setPttBinding(binding).conflict,
     }),
+    endConversation: () => voiceOrchestrator.endConversation(),
     setSettings: async (opts) => {
       voiceOrchestrator.setSettings(opts)
     },
+    broadcast: broadcastFn,
   })
 
   initToolsDeps(bundle)
@@ -479,6 +510,9 @@ app.whenReady().then(() => {
   registerStubHandlers()
   registerBriefingHandlers()
   setupBriefingScheduler()
+  initObsDeps({ obsRepo, chatClient: ollamaClient, dataDir, sqlite })
+  registerObservabilityHandlers()
+  flushReliabilityToRepo(obsRepo)
 
   // Background news refresh every 3 hours (quiet hours: before 6am or after 11pm).
   // Queued as a background task so it does not compete with foreground chat/agent calls.
@@ -489,12 +523,19 @@ app.whenReady().then(() => {
       void aiQueue
         .enqueueBackgroundAiTask(async () => {
           const newsRepo = createNewsRepo(bundle.db)
+          const bgPromptCacheRepo = createPromptCacheRepo(bundle.db)
+          const bgPromptCache = createPromptCache({
+            get: (h) => bgPromptCacheRepo.get(h),
+            set: (r) => bgPromptCacheRepo.set(r),
+            evictExpired: () => bgPromptCacheRepo.evictExpired(),
+          })
           await runFullPipeline({
             repo: newsRepo,
             ollamaClient,
             classifierModel: resolvedClassifierModel,
             summarizeModel: resolvedSummarizeModel,
             extractModel: resolvedExtractModel,
+            promptCache: bgPromptCache,
           })
           for (const win of BrowserWindow.getAllWindows()) {
             if (!win.isDestroyed())

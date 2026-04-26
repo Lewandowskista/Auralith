@@ -122,11 +122,13 @@ function NavRailButton({ item, isActive, onNavigate }: NavRailButtonProps): Reac
     >
       {item.icon}
 
-      {/* Active indicator bar */}
+      {/* Active indicator bar — shared layoutId creates sliding spring between items */}
       {isActive && (
-        <span
+        <motion.span
+          layoutId="nav-active-indicator"
           className="absolute top-1/2 -translate-y-1/2 w-[3px] h-4 rounded-full bg-accent-mid"
           style={{ left: -9 }}
+          transition={{ type: 'spring', stiffness: 400, damping: 30 }}
         />
       )}
 

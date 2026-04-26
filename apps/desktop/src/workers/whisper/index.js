@@ -75,6 +75,37 @@ function loadModel(path, whisperBinPath) {
   send({ type: 'ready' })
 }
 
+/**
+ * Compute RMS energy of a 16-bit PCM buffer.
+ * Returns a value in [0, 1] where 1 = full scale.
+ */
+function rmsEnergy(pcmBuffer) {
+  if (pcmBuffer.length < 2) return 0
+  let sum = 0
+  const samples = pcmBuffer.length / 2
+  for (let i = 0; i < pcmBuffer.length - 1; i += 2) {
+    const sample = pcmBuffer.readInt16LE(i) / 32768
+    sum += sample * sample
+  }
+  return Math.sqrt(sum / samples)
+}
+
+// Whisper hallucinations commonly produced on silence or near-silence
+const HALLUCINATION_PATTERNS = [
+  /^\s*you\s*$/i,
+  /^\s*thank you\s*\.?\s*$/i,
+  /^\s*\[blank_audio\]\s*$/i,
+  /^\s*\[silence\]\s*$/i,
+  /^\s*\.\s*$/,
+]
+
+function isHallucination(text) {
+  return HALLUCINATION_PATTERNS.some((re) => re.test(text))
+}
+
+// Minimum RMS energy required to attempt transcription (~-40 dBFS)
+const MIN_ENERGY_THRESHOLD = 0.01
+
 function runTranscription() {
   return new Promise((resolve, reject) => {
     if (!modelPath) {
@@ -86,6 +117,13 @@ function runTranscription() {
     audioChunks = []
 
     if (combinedPcm.length === 0) {
+      resolve({ text: '' })
+      return
+    }
+
+    // Skip transcription if the audio is essentially silence — whisper hallucinates
+    // tokens like "you" or "thank you" on silent input.
+    if (rmsEnergy(combinedPcm) < MIN_ENERGY_THRESHOLD) {
       resolve({ text: '' })
       return
     }
@@ -134,8 +172,11 @@ function runTranscription() {
         .join(' ')
         .trim()
 
-      if (text) send({ type: 'partial', text })
-      resolve({ text })
+      // Reject well-known whisper hallucination strings produced on silence
+      const safeText = isHallucination(text) ? '' : text
+
+      if (safeText) send({ type: 'partial', text: safeText })
+      resolve({ text: safeText })
     })
 
     proc.on('error', (err) => {

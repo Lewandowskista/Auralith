@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, ReactElement } from 'react'
 import { Bell, Camera, History, Send, WandSparkles, X } from 'lucide-react'
 import { loadPromptPresets, type PromptPreset } from '../lib/prompt-presets'
@@ -8,7 +8,13 @@ type Status = {
   text: string
 }
 
-export function SpotlightApp(): ReactElement {
+// ── SpotlightModal — in-app overlay variant ────────────────────────────────────
+
+export type SpotlightModalProps = {
+  onClose: () => void
+}
+
+export function SpotlightModal({ onClose }: SpotlightModalProps): ReactElement {
   const [input, setInput] = useState('')
   const [status, setStatus] = useState<Status>({
     tone: 'idle',
@@ -18,22 +24,18 @@ export function SpotlightApp(): ReactElement {
 
   useEffect(() => {
     void loadPromptPresets().then(setPromptPresets)
-    const off = window.auralith.on('spotlight:prefill', (data) => {
-      const prefill = (data as { prefill?: unknown }).prefill
-      if (typeof prefill === 'string') setInput(prefill)
-    })
-    return off
   }, [])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        void window.auralith.invoke('system.closeSpotlightWindow', {})
+        event.stopPropagation()
+        onClose()
       }
     }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
+    window.addEventListener('keydown', handleKeyDown, { capture: true })
+    return () => window.removeEventListener('keydown', handleKeyDown, { capture: true })
+  }, [onClose])
 
   async function sendToAssistant(message: string): Promise<void> {
     if (!message.trim()) return
@@ -45,6 +47,7 @@ export function SpotlightApp(): ReactElement {
     await window.auralith.invoke('system.dispatchShellAction', { id: 'assistant.focus' })
     setStatus({ tone: 'success', text: 'Sent to assistant.' })
     setInput('')
+    onClose()
   }
 
   async function runCapture(): Promise<void> {
@@ -66,19 +69,58 @@ export function SpotlightApp(): ReactElement {
     }
   }
 
+  const quickActions = useMemo(
+    () => [
+      {
+        label: 'Open notifications',
+        icon: <Bell size={15} />,
+        onClick: () => {
+          void window.auralith.invoke('system.dispatchShellAction', { id: 'notifications.open' })
+          onClose()
+        },
+      },
+      {
+        label: 'Capture screen',
+        icon: <Camera size={15} />,
+        onClick: () => {
+          void runCapture()
+        },
+      },
+      {
+        label: 'Open activity',
+        icon: <History size={15} />,
+        onClick: () => {
+          void window.auralith.invoke('system.dispatchShellAction', { id: 'nav.activity' })
+          onClose()
+        },
+      },
+      {
+        label: 'Focus assistant',
+        icon: <WandSparkles size={15} />,
+        onClick: () => {
+          void window.auralith.invoke('system.dispatchShellAction', { id: 'assistant.focus' })
+          onClose()
+        },
+      },
+    ],
+    [onClose],
+  )
+
   return (
     <div
       style={{
-        position: 'fixed',
-        inset: 0,
         display: 'flex',
         flexDirection: 'column',
-        background: '#0e0e14',
-        border: '1px solid rgba(255,255,255,0.08)',
-        borderRadius: 16,
+        background: 'rgba(14,14,20,0.92)',
+        backdropFilter: 'blur(28px)',
+        WebkitBackdropFilter: 'blur(28px)',
+        border: '1px solid rgba(255,255,255,0.10)',
+        borderRadius: 20,
         overflow: 'hidden',
         fontFamily: 'var(--font-sans, system-ui, sans-serif)',
         color: '#F4F4F8',
+        boxShadow: '0 24px 64px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04)',
+        maxHeight: '80vh',
       }}
     >
       {/* Header */}
@@ -110,7 +152,7 @@ export function SpotlightApp(): ReactElement {
           </p>
         </div>
         <button
-          onClick={() => void window.auralith.invoke('system.closeSpotlightWindow', {})}
+          onClick={onClose}
           style={{
             background: 'none',
             border: 'none',
@@ -135,7 +177,7 @@ export function SpotlightApp(): ReactElement {
       </div>
 
       {/* Scrollable body */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
+      <div style={{ overflowY: 'auto', padding: '16px' }}>
         {/* Input area */}
         <div
           style={{
@@ -217,35 +259,7 @@ export function SpotlightApp(): ReactElement {
 
         {/* Quick actions */}
         <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-          {[
-            {
-              label: 'Open notifications',
-              icon: <Bell size={15} />,
-              onClick: () =>
-                void window.auralith.invoke('system.dispatchShellAction', {
-                  id: 'notifications.open',
-                }),
-            },
-            {
-              label: 'Capture screen',
-              icon: <Camera size={15} />,
-              onClick: () => void runCapture(),
-            },
-            {
-              label: 'Open activity',
-              icon: <History size={15} />,
-              onClick: () =>
-                void window.auralith.invoke('system.dispatchShellAction', { id: 'nav.activity' }),
-            },
-            {
-              label: 'Focus assistant',
-              icon: <WandSparkles size={15} />,
-              onClick: () =>
-                void window.auralith.invoke('system.dispatchShellAction', {
-                  id: 'assistant.focus',
-                }),
-            },
-          ].map((action) => (
+          {quickActions.map((action) => (
             <button
               key={action.label}
               onClick={action.onClick}
@@ -320,6 +334,18 @@ export function SpotlightApp(): ReactElement {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── SpotlightApp — standalone window variant (used in spotlight.html) ──────────
+
+export function SpotlightApp(): ReactElement {
+  return (
+    <div style={{ position: 'fixed', inset: 0 }}>
+      <SpotlightModal
+        onClose={() => void window.auralith.invoke('system.closeSpotlightWindow', {})}
+      />
     </div>
   )
 }

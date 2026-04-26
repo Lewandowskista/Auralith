@@ -246,6 +246,21 @@ packages/
 - **Small-model-friendly** — bounded prompts, explicit JSON schemas, one-retry rule, graceful Ollama-offline fallback on every surface
 - **No cross-package leakage** — renderer never imports `better-sqlite3`, `chokidar`, or `fs`; workers never import React; `core-domain` depends only on Zod
 
+### Refinement pass — UX, UI & functionality polish ✅
+
+- **Activity JSON crash fix** — `safeParseJson` helper wraps all `payloadJson` parsing; `PayloadDetailView` component renders key/value pairs naturally instead of raw `<pre>` JSON
+- **`assistant.deleteSession` IPC handler** — deletes `conversation_turns` rows and clears the in-memory session history map; thread delete UI on `AssistantScreen` with inline confirm + toast
+- **Conversation context window widened** — turn history slice extended from 6 → 10; DB fetch limit raised from 12 → 20
+- **Weather geocoding** — `geocodeCity(city, country?)` in `core-weather` hits Open-Meteo geocoding API; `weather.setLocationByCity` IPC op saves resolved lat/lon + label; `WeatherScreen` replaces lat/lon fields with "City" + optional "Country code" inputs; geocoding loading state disables the save button during the call
+- **Markdown renderer expanded** — `markdown.tsx` now handles fenced code blocks (with basic keyword highlighting), ordered lists, blockquotes, tables, horizontal rules, nested bullets, and `[text](url)` links; system prompt updated to allow markdown formatting
+- **Markdown applied across surfaces** — briefing cluster summaries, Knowledge chunk previews, assistant message bubbles, news article summaries + AI analysis sections, and news cluster labels all render through `renderMarkdown`
+- **News screen improvements** — summary clamp raised to 3 lines with animated expand toggle; video support in article reader (`<video>` for direct URLs, `<iframe>` for YouTube embeds); `NewsItemCard` extracted to its own component
+- **Spotlight redesigned as in-app modal** — `SpotlightModal` variant added to `SpotlightApp.tsx`; `AppShell` renders it as an `AnimatePresence` overlay at high z-index with blur backdrop; main process global shortcut now sends `global-shortcut: spotlight.open` IPC event to renderer instead of opening a separate `BrowserWindow`
+- **OllamaBanner recovery states** — `retryState` cycle (`idle → checking → success/failed → idle`) with contextual labels; post-retry `ollama.getStatus` probe confirms actual connectivity before showing "Connected!"
+- **AI assistant intelligence** — system prompt additions: ask one clarifying question on ambiguous input; resolve pronouns/references from conversation history; session summary upserted to `sessions` table after each turn and passed as context in future turns
+- **Suggestion action chip** — `describeSuggestedAction` helper on `HomeScreen` safely parses `proposedActionJson` and renders a small accent chip showing action type and key params
+- **Agent loop + router hardening** — `core-ai` agent loop and router received significant improvements to structured output validation and retry logic
+
 ### Milestone 12 — Quality hardening ✅
 
 - **`crash_stats` table** — rolling 30-day `crash`/`error` entries keyed by module; purged on startup; `CrashStatsRepo` with `record`, `getSummary`, `getTotalCount`, `purgeStale`, `clear`

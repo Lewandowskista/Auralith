@@ -55,6 +55,16 @@ export function VoiceCaptureBridge(): ReactElement | null {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Microphone capture failed'
         console.error('[voice-capture]', message)
+        const isPermissionDenied =
+          err instanceof DOMException &&
+          (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')
+        if (isPermissionDenied) {
+          window.dispatchEvent(
+            new CustomEvent('voice:error', {
+              detail: 'Microphone permission was denied. Grant access in Settings → Voice.',
+            }),
+          )
+        }
         void window.auralith.invoke('voice.cancelCapture', { sessionId })
       }
     }

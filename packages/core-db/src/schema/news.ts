@@ -58,4 +58,7 @@ export const newsItems = sqliteTable('news_items', {
   author: text('author'),
   categories: text('categories'),
   readingTimeMin: integer('reading_time_min'),
+  // M16: full article content fetching
+  fullContent: text('full_content'),
+  fullContentFetchedAt: integer('full_content_fetched_at', { mode: 'timestamp_ms' }),
 })

@@ -84,22 +84,10 @@ body,
   100% { background-position: 200% 0; }
 }
 
-/* Token streaming fade-in — applied to the live tail span during assistant streaming */
-@keyframes token-fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
 /* Blinking text cursor shown at the end of streaming assistant messages */
 @keyframes cursor-blink {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0; }
-}
-
-/* Thinking indicator dots — three dots that bounce in sequence */
-@keyframes thinking-dot {
-  0%, 80%, 100% { opacity: 0.2; transform: translateY(0); }
-  40%           { opacity: 1;   transform: translateY(-3px); }
 }
 
 /* Article body — scoped styles for full article HTML rendered in reader panel */

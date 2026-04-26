@@ -89,6 +89,22 @@
       "node_modules/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "resources/whisper",
+        "to": "whisper",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/piper",
+        "to": "piper",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "win": {
       "target": [
         {

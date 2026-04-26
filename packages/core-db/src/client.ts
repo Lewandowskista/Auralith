@@ -394,6 +394,19 @@ function runMigrations(sqlite: Database.Database): void {
     }
   }
 
+  // M16: full article content fetching
+  const m16cols: [string, string][] = [
+    ['full_content', 'TEXT'],
+    ['full_content_fetched_at', 'INTEGER'],
+  ]
+  for (const [col, type] of m16cols) {
+    try {
+      sqlite.exec(`ALTER TABLE news_items ADD COLUMN ${col} ${type}`)
+    } catch {
+      // column already exists — ignore
+    }
+  }
+
   // Wave 3: additive docs columns for wider ingestion
   const docsCols: [string, string][] = [['source_url', 'TEXT']]
   for (const [col, type] of docsCols) {
@@ -407,6 +420,13 @@ function runMigrations(sqlite: Database.Database): void {
   // Wave 3: routines v2 — add actions_json column (multi-step)
   try {
     sqlite.exec(`ALTER TABLE routines ADD COLUMN actions_json TEXT`)
+  } catch {
+    /* already exists */
+  }
+
+  // M-V2: voice conversation tracking
+  try {
+    sqlite.exec(`ALTER TABLE voice_transcripts ADD COLUMN voice_conversation_id TEXT`)
   } catch {
     /* already exists */
   }
@@ -435,6 +455,77 @@ function runMigrations(sqlite: Database.Database): void {
       imported_at INTEGER NOT NULL
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_browser_history_url ON browser_history_imports(url);
+  `)
+
+  // Perf indexes — idempotent, safe to re-run
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_news_items_feed_id ON news_items(feed_id);
+    CREATE INDEX IF NOT EXISTS idx_news_items_cluster_id ON news_items(cluster_id);
+    CREATE INDEX IF NOT EXISTS idx_news_items_published_at ON news_items(published_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_events_session_id ON events(session_id);
+  `)
+
+  // M14: docs quality columns (summary, pipeline_version) and docs_fts over summaries
+  const m14DocsCols: [string, string][] = [
+    ['summary', 'TEXT'],
+    ['pipeline_version', 'INTEGER NOT NULL DEFAULT 0'],
+  ]
+  for (const [col, type] of m14DocsCols) {
+    try {
+      sqlite.exec(`ALTER TABLE docs ADD COLUMN ${col} ${type}`)
+    } catch {
+      // column already exists — ignore
+    }
+  }
+
+  sqlite.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(
+      summary,
+      content='docs',
+      content_rowid='rowid'
+    );
+
+    -- M14: IPC trace persistence (rolling 7-day window)
+    CREATE TABLE IF NOT EXISTS traces (
+      trace_id TEXT PRIMARY KEY,
+      op TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      err_code TEXT,
+      ts INTEGER NOT NULL,
+      params_bytes INTEGER NOT NULL DEFAULT 0,
+      result_bytes INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_traces_ts ON traces(ts DESC);
+    CREATE INDEX IF NOT EXISTS idx_traces_op_ts ON traces(op, ts DESC);
+
+    -- M14: model structured-output reliability (hourly bucketed, rolling 30-day)
+    CREATE TABLE IF NOT EXISTS model_reliability (
+      id TEXT PRIMARY KEY,
+      model TEXT NOT NULL,
+      role TEXT NOT NULL,
+      prompt_id TEXT NOT NULL DEFAULT '',
+      hour_bucket INTEGER NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      parse_failures INTEGER NOT NULL DEFAULT 0,
+      validation_failures INTEGER NOT NULL DEFAULT 0,
+      repaired INTEGER NOT NULL DEFAULT 0,
+      successes INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_model_reliability_key
+      ON model_reliability(model, role, prompt_id, hour_bucket);
+
+    -- M14: retrieval quality traces (rolling 7-day window)
+    CREATE TABLE IF NOT EXISTS retrieval_traces (
+      id TEXT PRIMARY KEY,
+      ts INTEGER NOT NULL,
+      query TEXT NOT NULL,
+      hit_count INTEGER NOT NULL,
+      top_score REAL,
+      latency_ms INTEGER NOT NULL,
+      hits_json TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE INDEX IF NOT EXISTS idx_retrieval_traces_ts ON retrieval_traces(ts DESC);
   `)
 }
 

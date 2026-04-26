@@ -1,15 +1,17 @@
-import type { SearchHit } from './hybrid'
+import type { SearchHit, NeighborChunk } from './hybrid'
 
 export type Citation = {
   n: number
   chunkId: string
   docPath: string
   docTitle: string
+  docSummary: string | null
   headingPath: string
   charStart: number
   charEnd: number
   page: number | undefined
   text: string
+  neighbors?: NeighborChunk[]
 }
 
 export type CitationContext = {
@@ -18,17 +20,22 @@ export type CitationContext = {
 }
 
 export function assembleCitations(hits: SearchHit[]): CitationContext {
-  const citations: Citation[] = hits.map((h, i) => ({
-    n: i + 1,
-    chunkId: h.chunkId,
-    docPath: h.docPath,
-    docTitle: h.docTitle,
-    headingPath: h.headingPath,
-    charStart: h.charStart,
-    charEnd: h.charEnd,
-    page: h.page,
-    text: h.text,
-  }))
+  const citations: Citation[] = hits.map((h, i) => {
+    const c: Citation = {
+      n: i + 1,
+      chunkId: h.chunkId,
+      docPath: h.docPath,
+      docTitle: h.docTitle,
+      docSummary: h.docSummary ?? null,
+      headingPath: h.headingPath,
+      charStart: h.charStart,
+      charEnd: h.charEnd,
+      page: h.page,
+      text: h.text,
+    }
+    if (h.neighbors) c.neighbors = h.neighbors
+    return c
+  })
 
   const chunks = citations.map((c) => ({
     n: c.n,

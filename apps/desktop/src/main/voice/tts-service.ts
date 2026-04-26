@@ -69,6 +69,8 @@ $synth.GetInstalledVoices() | ForEach-Object {
               id: parts[0] ?? '',
               name: parts[1] ?? '',
               lang: parts[2] ?? '',
+              provider: 'sapi' as const,
+              installed: true,
             }
           })
           .filter((v) => v.id.length > 0)

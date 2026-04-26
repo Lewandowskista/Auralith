@@ -32,6 +32,7 @@ import { VoiceCaptureBridge } from './VoiceCaptureBridge'
 import { TitleBar } from './TitleBar'
 import { toast } from 'sonner'
 import { loadPromptPresets } from '../lib/prompt-presets'
+import { SpotlightModal } from './SpotlightApp'
 
 const AssistantScreen = lazy(() =>
   import('../screens/assistant/AssistantScreen').then((m) => ({ default: m.AssistantScreen })),
@@ -93,6 +94,7 @@ export function AppShell(): ReactElement {
   const [notificationCount, setNotificationCount] = useState(0)
   const [confirmRequest, setConfirmRequest] = useState<ConfirmActionRequest | null>(null)
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null)
+  const [spotlightOpen, setSpotlightOpen] = useState(false)
 
   // Check whether onboarding has been done
   useEffect(() => {
@@ -119,7 +121,7 @@ export function AppShell(): ReactElement {
   const openNotifications = useCallback(() => setNotificationCenterOpen(true), [])
   const closeNotifications = useCallback(() => setNotificationCenterOpen(false), [])
   const openSpotlight = useCallback(() => {
-    void window.auralith.invoke('system.openSpotlightWindow', {})
+    setSpotlightOpen(true)
   }, [])
 
   const openAssistantWithPrefill = useCallback((text: string) => {
@@ -346,6 +348,7 @@ export function AppShell(): ReactElement {
       const { id, prefill, payload } = data as { id: string; prefill?: string; payload?: unknown }
       if (id === 'palette.open') openPalette(prefill)
       if (id === 'palette.close') closePalette()
+      if (id === 'spotlight.open') setSpotlightOpen(true)
       if (id === 'assistant.focus') {
         setActiveSection('assistant')
         openPalette()
@@ -439,12 +442,15 @@ export function AppShell(): ReactElement {
     const handleRunCapture = () => {
       void runQuickCapture()
     }
+    const handleOpenSpotlight = () => setSpotlightOpen(true)
 
     window.addEventListener('auralith:notifications-open', handleOpenNotifications)
     window.addEventListener('auralith:run-capture', handleRunCapture)
+    window.addEventListener('auralith:spotlight-open', handleOpenSpotlight)
     return () => {
       window.removeEventListener('auralith:notifications-open', handleOpenNotifications)
       window.removeEventListener('auralith:run-capture', handleRunCapture)
+      window.removeEventListener('auralith:spotlight-open', handleOpenSpotlight)
     }
   }, [openNotifications, runQuickCapture])
 
@@ -558,6 +564,39 @@ export function AppShell(): ReactElement {
       />
       <ShortcutsDialog open={shortcutsOpen} onClose={closeShortcuts} />
       <NotificationCenter open={notificationCenterOpen} onClose={closeNotifications} />
+
+      {/* Spotlight — in-app modal with frosted backdrop */}
+      <AnimatePresence>
+        {spotlightOpen && (
+          <>
+            <motion.div
+              key="spotlight-backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              className="fixed inset-0 z-[200]"
+              style={{
+                background: 'rgba(0,0,0,0.45)',
+                backdropFilter: 'blur(12px)',
+                WebkitBackdropFilter: 'blur(12px)',
+              }}
+              onClick={() => setSpotlightOpen(false)}
+            />
+            <motion.div
+              key="spotlight-panel"
+              initial={{ opacity: 0, scale: 0.95, y: -12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: -12 }}
+              transition={{ duration: 0.18, ease: [0, 0, 0.2, 1] }}
+              className="fixed z-[201] left-1/2 top-[22%]"
+              style={{ width: 520, transform: 'translateX(-50%)', pointerEvents: 'all' }}
+            >
+              <SpotlightModal onClose={() => setSpotlightOpen(false)} />
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       {/* Confirm action sheet (confirm + restricted tier) */}
       <ConfirmActionSheet

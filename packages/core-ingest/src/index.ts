@@ -1,4 +1,5 @@
-export { ingestFile, type IngestResult, type DocKind } from './pipeline'
+export { ingestFile, PIPELINE_VERSION, type IngestResult, type DocKind } from './pipeline'
+export { summarizeDoc } from './summarizer'
 export { chunkText, type RawChunk } from './chunker'
 export { parseMd } from './parsers/md'
 export { parseTxt } from './parsers/txt'

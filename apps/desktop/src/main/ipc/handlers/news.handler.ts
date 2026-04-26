@@ -1,3 +1,4 @@
+import { BrowserWindow } from 'electron'
 import { registerHandler } from '../router'
 import type { DbBundle } from '@auralith/core-db'
 import { createNewsRepo } from '@auralith/core-news'
@@ -17,19 +18,32 @@ import {
   NewsSeedTopicsParamsSchema,
   NewsListTopicFeedsParamsSchema,
 } from '@auralith/core-domain'
-import type { OllamaClient } from '@auralith/core-ai'
+import type { OllamaClient, PromptCacheStore } from '@auralith/core-ai'
+import { createPromptCache } from '@auralith/core-ai'
+import { createPromptCacheRepo } from '@auralith/core-db'
 import { runFullPipeline } from '@auralith/core-news'
 
 type NewsDeps = {
   bundle: DbBundle
   ollamaClient?: OllamaClient
   classifierModel?: string
+  summarizeModel?: string
+  extractModel?: string
+  promptCache?: PromptCacheStore
 }
 
 let _deps: NewsDeps | null = null
 
-export function initNewsDeps(deps: NewsDeps): void {
-  _deps = deps
+export function initNewsDeps(deps: Omit<NewsDeps, 'promptCache'> & { bundle: DbBundle }): void {
+  const cacheRepo = createPromptCacheRepo(deps.bundle.db)
+  _deps = {
+    ...deps,
+    promptCache: createPromptCache({
+      get: (hash) => cacheRepo.get(hash),
+      set: (row) => cacheRepo.set(row),
+      evictExpired: () => cacheRepo.evictExpired(),
+    }),
+  }
 }
 
 function getDeps(): NewsDeps {
@@ -109,13 +123,15 @@ export function registerNewsHandlers(): void {
       limit: opts.limit,
       offset: opts.offset,
     })
+    const clusterIds = clusterRows.map((c) => c.id)
+    const itemCounts = repo.getClusterItemCounts(clusterIds)
     return {
       clusters: clusterRows.map((c) => ({
         id: c.id,
         topicId: c.topicId,
         summary: c.summary,
         createdAt: c.createdAt.getTime(),
-        itemCount: repo.getClusterItemCount(c.id),
+        itemCount: itemCounts.get(c.id) ?? 0,
       })),
     }
   })
@@ -138,19 +154,34 @@ export function registerNewsHandlers(): void {
       ...(opts.clusterId !== undefined ? { clusterId: opts.clusterId } : {}),
       ...(opts.feedId !== undefined ? { feedId: opts.feedId } : {}),
     })
+
+    // Single query to fetch all feed titles for the result set
+    const uniqueFeedIds = [...new Set(items.map((i) => i.feedId))]
+    const feedTitleCache = repo.getFeedsByIds(uniqueFeedIds)
+
     return {
       items: items.map((i) => ({
         id: i.id,
         feedId: i.feedId,
+        sourceName: feedTitleCache.get(i.feedId) ?? '',
         title: i.title,
         url: i.url,
         publishedAt: i.publishedAt?.getTime(),
+        rawText: i.rawText ?? undefined,
         summary: i.summary ?? undefined,
         analysis: i.analysis ?? undefined,
         clusterId: i.clusterId ?? undefined,
         fetchedAt: i.fetchedAt.getTime(),
         readAt: i.readAt?.getTime(),
         saved: i.saved,
+        imageUrl: i.imageUrl ?? undefined,
+        videoUrl: i.videoUrl ?? undefined,
+        mediaType: i.mediaType ?? undefined,
+        author: i.author ?? undefined,
+        categories: i.categories ? i.categories.split(',').filter(Boolean) : undefined,
+        readingTimeMin: i.readingTimeMin ?? undefined,
+        fullContent: i.fullContent ?? undefined,
+        fullContentFetchedAt: i.fullContentFetchedAt?.getTime(),
       })),
       total,
     }
@@ -174,14 +205,25 @@ export function registerNewsHandlers(): void {
 
   registerHandler('news.triggerFetch', async (params) => {
     NewsTriggerFetchParamsSchema.parse(params)
-    const { bundle, ollamaClient, classifierModel } = getDeps()
+    const { bundle, ollamaClient, classifierModel, summarizeModel, extractModel, promptCache } =
+      getDeps()
     const repo = createNewsRepo(bundle.db)
-    // Run pipeline in background — don't await
+    // Run pipeline in background — broadcast completion when done
     void runFullPipeline({
       repo,
       ...(ollamaClient ? { ollamaClient } : {}),
       ...(classifierModel ? { classifierModel } : {}),
-    }).catch((err: unknown) => console.error('[news] pipeline error:', err))
+      ...(summarizeModel ? { summarizeModel } : {}),
+      ...(extractModel ? { extractModel } : {}),
+      ...(promptCache ? { promptCache } : {}),
+    })
+      .then(() => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed())
+            win.webContents.send('news:fetch-complete', { clustersUpdated: true })
+        }
+      })
+      .catch((err: unknown) => console.error('[news] pipeline error:', err))
     return { triggered: true }
   })
 
