@@ -13,11 +13,10 @@ import {
   BrainReindexParamsSchema,
   BrainListDocsParamsSchema,
 } from '@auralith/core-domain'
-import type { OllamaClient } from '@auralith/core-ai'
+import type { OllamaClient, ModelRouter } from '@auralith/core-ai'
 import { hybridSearch } from '@auralith/core-retrieval'
 import type Database from 'better-sqlite3'
-import { ingestFile } from '@auralith/core-ingest'
-import { embedChunks } from '@auralith/core-ingest'
+import { ingestFile, embedChunks, summarizeDoc } from '@auralith/core-ingest'
 import { readdir } from 'fs/promises'
 import { join } from 'path'
 
@@ -26,6 +25,7 @@ type BrainDeps = {
   sqlite: Database.Database
   embedClient: OllamaClient
   embedModel: string
+  router?: ModelRouter
 }
 
 // Set by initBrainDeps from main process after Ollama is ready
@@ -102,10 +102,14 @@ export function registerBrainHandlers(): void {
   registerHandler('brain.listDocs', async (params) => {
     const { spaceId, limit, offset } = BrainListDocsParamsSchema.parse(params)
     const { bundle } = getDeps()
-    const query = bundle.db.select().from(docs)
-    if (spaceId) query.where(eq(docs.spaceId, spaceId))
-    const rows = query.limit(limit).offset(offset).all()
-    const total = bundle.db.select().from(docs).all().length
+    const baseQuery = bundle.db.select().from(docs)
+    const pagedQuery = bundle.db.select().from(docs)
+    if (spaceId) {
+      baseQuery.where(eq(docs.spaceId, spaceId))
+      pagedQuery.where(eq(docs.spaceId, spaceId))
+    }
+    const rows = pagedQuery.limit(limit).offset(offset).all()
+    const total = baseQuery.all().length
     return {
       docs: rows.map((d) => ({
         id: d.id,
@@ -162,10 +166,10 @@ export function registerBrainHandlers(): void {
         doc: {
           id: h.docId,
           path: h.docPath,
-          kind: 'md' as const,
+          kind: h.docKind,
           title: h.docTitle,
-          size: 0,
-          mtime: 0,
+          size: h.docSize,
+          mtime: h.docMtime,
         },
         citation: {
           chunkId: h.chunkId,
@@ -183,7 +187,7 @@ export function registerBrainHandlers(): void {
 
   registerHandler('brain.reindex', async (params) => {
     const { spaceId, force } = BrainReindexParamsSchema.parse(params)
-    const { bundle, sqlite, embedClient, embedModel } = getDeps()
+    const { bundle, sqlite, embedClient, embedModel, router } = getDeps()
 
     // Find folders from folder_rules for this space (or all spaces)
     const rules = spaceId
@@ -194,7 +198,7 @@ export function registerBrainHandlers(): void {
     let queued = 0
     for (const rule of rules) {
       // Walk directory for supported files
-      const files = await walkDir(rule.path, ['.md', '.txt', '.pdf'])
+      const files = await walkDir(rule.path, ['.md', '.txt', '.pdf', '.docx', '.html', '.epub'])
       for (const file of files) {
         queued++
         // Fire-and-forget per file — errors are logged per-file
@@ -202,7 +206,6 @@ export function registerBrainHandlers(): void {
           spaceId: rule.spaceId,
           sqlite,
           onChunksReady: async (docId, texts) => {
-            // Get chunk IDs for the doc
             const docChunks = bundle.db.select().from(chunks).where(eq(chunks.docId, docId)).all()
             await embedChunks(
               docId,
@@ -213,6 +216,14 @@ export function registerBrainHandlers(): void {
               bundle.vec,
             )
           },
+          onSummarize: router
+            ? async (docId, text) => {
+                const summary = await summarizeDoc(text, router, embedClient)
+                if (summary) {
+                  bundle.db.update(docs).set({ summary }).where(eq(docs.id, docId)).run()
+                }
+              }
+            : undefined,
         }).catch((err: unknown) => {
           console.error(`[ingest] ${file}:`, err)
         })

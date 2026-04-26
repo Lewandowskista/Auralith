@@ -25,7 +25,12 @@ describe('runPrompt — JSON reliability tracking', () => {
   beforeEach(() => resetJsonReliabilityStats())
 
   it('increments successes on a valid response', async () => {
-    const result = await runPrompt(contract, { input: 'apple' }, fakeClient(['{"label":"fruit"}']), 'phi4-mini:3.8b')
+    const result = await runPrompt(
+      contract,
+      { input: 'apple' },
+      fakeClient(['{"label":"fruit"}']),
+      'phi4-mini:3.8b',
+    )
     expect(result.ok).toBe(true)
     const stats = getJsonReliabilityStats()
     const stat = stats.find((s) => s.model === 'phi4-mini:3.8b' && s.role === 'classifier')
@@ -35,7 +40,12 @@ describe('runPrompt — JSON reliability tracking', () => {
   })
 
   it('increments parseFailures when JSON is malformed (both attempts)', async () => {
-    await runPrompt(contract, { input: 'x' }, fakeClient(['not-json', 'also-not-json']), 'test-model:3b')
+    await runPrompt(
+      contract,
+      { input: 'x' },
+      fakeClient(['not-json', 'also-not-json']),
+      'test-model:3b',
+    )
     const stats = getJsonReliabilityStats()
     const stat = stats.find((s) => s.model === 'test-model:3b')
     expect(stat).toBeDefined()

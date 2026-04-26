@@ -10,10 +10,8 @@ export type IpcResponse =
   | { ok: true; data: unknown }
   | { ok: false; error: { message: string; code?: string } }
 
-let requestCounter = 0
-
 function invoke(op: string, params: unknown = {}): Promise<IpcResponse> {
-  const requestId = `req_${++requestCounter}_${Date.now()}`
+  const requestId = crypto.randomUUID()
   const request: IpcRequest = { op, params, requestId }
   return ipcRenderer.invoke('auralith:invoke', request) as Promise<IpcResponse>
 }

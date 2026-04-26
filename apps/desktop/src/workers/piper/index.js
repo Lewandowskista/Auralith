@@ -49,6 +49,9 @@ const cancelledIds = new Set()
 // Chunk accumulator for stdout
 let stdoutBuf = Buffer.alloc(0)
 
+// Active synthesis poll timer — kept at module scope so process crash events can clear it
+let activeWatchTimer = null
+
 // ---------------------------------------------------------------------------
 // Piper process management
 // ---------------------------------------------------------------------------
@@ -100,11 +103,13 @@ function spawnPiper(modelPath) {
 
   proc.on('error', (err) => {
     send({ type: 'error', message: `piper process error: ${err.message}` })
+    if (activeWatchTimer !== null) { clearInterval(activeWatchTimer); activeWatchTimer = null }
     piperProc = null
     isReady = false
   })
 
   proc.on('close', (code) => {
+    if (activeWatchTimer !== null) { clearInterval(activeWatchTimer); activeWatchTimer = null }
     piperProc = null
     isReady = false
     if (code !== 0 && code !== null) {
@@ -188,12 +193,14 @@ function processNext() {
   // followed by an end-of-stream signal when stdin line is consumed.
   // We capture all stdout data between writes and flush it as chunks.
 
+  // Piper processes one line at a time. We attach the stdout listener AFTER
+  // writing the input line to avoid any race where data from a previous
+  // synthesis leaks into this request's listener.
+  let lastDataAt = Date.now()
+
   const onData = (chunk) => {
-    if (cancelledIds.has(id)) {
-      // Don't forward more PCM for cancelled requests
-      return
-    }
-    // Forward raw PCM chunk directly — renderer will handle buffering
+    if (cancelledIds.has(id)) return
+    lastDataAt = Date.now()
     send({
       type: 'pcm',
       id,
@@ -202,34 +209,24 @@ function processNext() {
     })
   }
 
-  piperProc.stdout.on('data', onData)
-
   piperProc.stdin.write(inputLine, 'utf8', (writeErr) => {
     if (writeErr) {
-      piperProc.stdout.removeListener('data', onData)
       send({ type: 'error', id, message: `stdin write error: ${writeErr.message}` })
       setImmediate(processNext)
       return
     }
 
-    // Piper processes one line at a time; after writing we wait for
-    // stdout to flush. Use a short polling approach: if no new data
-    // arrives for 150 ms after the last byte, consider synthesis done.
-    let lastDataAt = Date.now()
-    let watchTimer = null
+    // Attach listener only after the write is confirmed flushed to piper's stdin.
+    piperProc.stdout.on('data', onData)
 
-    const onDataWithTs = (chunk) => {
-      lastDataAt = Date.now()
-      onData(chunk)
-    }
-
-    piperProc.stdout.removeListener('data', onData)
-    piperProc.stdout.on('data', onDataWithTs)
-
-    watchTimer = setInterval(() => {
-      if (Date.now() - lastDataAt > 150) {
-        clearInterval(watchTimer)
-        piperProc.stdout.removeListener('data', onDataWithTs)
+    // Poll: if no new data arrives for 300 ms after the last byte, synthesis is done.
+    // 300 ms avoids false early termination on slow hardware where the first PCM
+    // bytes may arrive >150 ms after the stdin write.
+    activeWatchTimer = setInterval(() => {
+      if (Date.now() - lastDataAt > 300) {
+        clearInterval(activeWatchTimer)
+        activeWatchTimer = null
+        piperProc.stdout.removeListener('data', onData)
 
         if (!cancelledIds.has(id)) {
           send({ type: 'done', id })

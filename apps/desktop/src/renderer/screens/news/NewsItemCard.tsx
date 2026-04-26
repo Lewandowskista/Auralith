@@ -54,7 +54,13 @@ function sourceHue(name: string): number {
   return 180 + (Math.abs(hash) % 120)
 }
 
-function SourceBadge({ name, overlay = false }: { name: string; overlay?: boolean }): ReactElement {
+export function SourceBadge({
+  name,
+  overlay = false,
+}: {
+  name: string
+  overlay?: boolean
+}): ReactElement {
   const hue = sourceHue(name)
   if (overlay) {
     return (

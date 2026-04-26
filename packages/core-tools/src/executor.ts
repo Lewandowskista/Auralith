@@ -11,6 +11,15 @@ export type ExecutorDeps = {
     params: unknown,
     reversible: boolean,
   ) => Promise<boolean>
+  /** Called for confirm-transient tools — auto-confirms after 3 s unless cancelled; skipped if tool is allow-listed */
+  requestTransientConfirmation: (
+    invocationId: string,
+    toolId: string,
+    params: unknown,
+    reversible: boolean,
+  ) => Promise<boolean>
+  /** Synchronously check if a tool is in the always-allow list */
+  isAllowListed: (toolId: string) => boolean
   /** Called for restricted-tier tools — resolves true only if user typed "CONFIRM" */
   requestRestrictedConfirmation: (
     invocationId: string,
@@ -99,6 +108,25 @@ export async function executeTool<R = unknown>(
         meta: { invocationId, tier: 'confirm', params: parsed.data },
       })
       return { outcome: 'cancelled', invocationId, traceId: ctx.traceId }
+    }
+  } else if (tool.tier === 'confirm-transient') {
+    // Skip confirmation if allow-listed by the user
+    if (!deps.isAllowListed(toolId)) {
+      const confirmed = await deps.requestTransientConfirmation(
+        invocationId,
+        toolId,
+        parsed.data,
+        tool.reversible !== undefined,
+      )
+      if (!confirmed) {
+        await deps.auditRepo.write({
+          kind: 'tool.cancelled',
+          actor: ctx.actor,
+          subject: toolId,
+          meta: { invocationId, tier: 'confirm-transient', params: parsed.data },
+        })
+        return { outcome: 'cancelled', invocationId, traceId: ctx.traceId }
+      }
     }
   }
 

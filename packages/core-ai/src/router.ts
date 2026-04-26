@@ -4,16 +4,16 @@ import type { OllamaClient } from './client'
 // Roles added in v2: rag, news_synthesis, tool_call, coding.
 // Legacy aliases: "agent" covers both planning and tool_call for older configs.
 export type ModelRole =
-  | 'classifier'    // intent classification, labelling (fast, small model preferred)
-  | 'chat'          // multi-turn conversation
-  | 'summarize'     // summarization / briefing
-  | 'extract'       // extraction / rewriting
-  | 'agent'         // agent planner + reflection (may need stronger model)
-  | 'embed'         // embedding (vector model, not a chat model)
-  | 'rag'           // RAG answer synthesis from retrieved chunks
-  | 'news_synthesis'// multi-article news digest synthesis
-  | 'tool_call'     // single-tool decision / tool-call planning
-  | 'coding'        // code generation, debugging, scripting (qwen2.5-coder recommended)
+  | 'classifier' // intent classification, labelling (fast, small model preferred)
+  | 'chat' // multi-turn conversation
+  | 'summarize' // summarization / briefing
+  | 'extract' // extraction / rewriting
+  | 'agent' // agent planner + reflection (may need stronger model)
+  | 'embed' // embedding (vector model, not a chat model)
+  | 'rag' // RAG answer synthesis from retrieved chunks
+  | 'news_synthesis' // multi-article news digest synthesis
+  | 'tool_call' // single-tool decision / tool-call planning
+  | 'coding' // code generation, debugging, scripting (qwen2.5-coder recommended)
 
 export type ModelConfig = {
   classifier: string
@@ -47,16 +47,16 @@ export const MODEL_PRESETS: Record<ModelPresetName, ModelPreset> = {
     description:
       'Recommended for RTX 3060 Ti / 8 GB VRAM. phi4-mini for classifier/extract, qwen3:8b for chat/agent/summarize/rag/news/tool_call, qwen2.5-coder for coding.',
     config: {
-      classifier:     'phi4-mini:3.8b',
-      summarize:      'qwen3:8b',
-      extract:        'phi4-mini:3.8b',
-      chat:           'qwen3:8b',
-      agent:          'qwen3:8b',
-      rag:            'qwen3:8b',
+      classifier: 'phi4-mini:3.8b',
+      summarize: 'qwen3:8b',
+      extract: 'phi4-mini:3.8b',
+      chat: 'qwen3:8b',
+      agent: 'qwen3:8b',
+      rag: 'qwen3:8b',
       news_synthesis: 'qwen3:8b',
-      tool_call:      'qwen3:8b',
-      coding:         'qwen2.5-coder:7b',
-      embed:          'nomic-embed-text',
+      tool_call: 'qwen3:8b',
+      coding: 'qwen2.5-coder:7b',
+      embed: 'nomic-embed-text',
     },
   },
   fast: {
@@ -64,16 +64,16 @@ export const MODEL_PRESETS: Record<ModelPresetName, ModelPreset> = {
     description:
       'phi4-mini:3.8b for most tasks; qwen3:8b for agent/tool_call/news_synthesis; qwen2.5-coder for coding. Lowest latency, 8 GB VRAM safe.',
     config: {
-      classifier:     'phi4-mini:3.8b',
-      summarize:      'phi4-mini:3.8b',
-      extract:        'phi4-mini:3.8b',
-      chat:           'phi4-mini:3.8b',
-      agent:          'qwen3:8b',
-      rag:            'phi4-mini:3.8b',
+      classifier: 'phi4-mini:3.8b',
+      summarize: 'phi4-mini:3.8b',
+      extract: 'phi4-mini:3.8b',
+      chat: 'phi4-mini:3.8b',
+      agent: 'qwen3:8b',
+      rag: 'phi4-mini:3.8b',
       news_synthesis: 'qwen3:8b',
-      tool_call:      'qwen3:8b',
-      coding:         'qwen2.5-coder:7b',
-      embed:          'nomic-embed-text',
+      tool_call: 'qwen3:8b',
+      coding: 'qwen2.5-coder:7b',
+      embed: 'nomic-embed-text',
     },
   },
   quality: {
@@ -81,16 +81,16 @@ export const MODEL_PRESETS: Record<ModelPresetName, ModelPreset> = {
     description:
       'qwen3:8b for chat, agent, rag, news_synthesis, tool_call, and summarization; qwen2.5-coder for coding. Best output quality within 8 GB VRAM.',
     config: {
-      classifier:     'phi4-mini:3.8b',
-      summarize:      'qwen3:8b',
-      extract:        'phi4-mini:3.8b',
-      chat:           'qwen3:8b',
-      agent:          'qwen3:8b',
-      rag:            'qwen3:8b',
+      classifier: 'phi4-mini:3.8b',
+      summarize: 'qwen3:8b',
+      extract: 'phi4-mini:3.8b',
+      chat: 'qwen3:8b',
+      agent: 'qwen3:8b',
+      rag: 'qwen3:8b',
       news_synthesis: 'qwen3:8b',
-      tool_call:      'qwen3:8b',
-      coding:         'qwen2.5-coder:7b',
-      embed:          'nomic-embed-text',
+      tool_call: 'qwen3:8b',
+      coding: 'qwen2.5-coder:7b',
+      embed: 'nomic-embed-text',
     },
   },
 }
@@ -98,8 +98,8 @@ export const MODEL_PRESETS: Record<ModelPresetName, ModelPreset> = {
 // Legacy models kept for migration path — users who saved old model names get
 // these replaced with balanced-preset equivalents on first load.
 const LEGACY_MODEL_MAP: Record<string, string> = {
-  'llama3.2:3b':       'phi4-mini:3.8b',
-  'phi3:3.8b':         'phi4-mini:3.8b',
+  'llama3.2:3b': 'phi4-mini:3.8b',
+  'phi3:3.8b': 'phi4-mini:3.8b',
   'qwen2.5:7b-instruct': 'qwen3:8b',
 }
 

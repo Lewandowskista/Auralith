@@ -17,11 +17,12 @@ import {
   NewsTriggerFetchParamsSchema,
   NewsSeedTopicsParamsSchema,
   NewsListTopicFeedsParamsSchema,
+  NewsFetchItemFullContentParamsSchema,
 } from '@auralith/core-domain'
 import type { OllamaClient, PromptCacheStore } from '@auralith/core-ai'
 import { createPromptCache } from '@auralith/core-ai'
 import { createPromptCacheRepo } from '@auralith/core-db'
-import { runFullPipeline } from '@auralith/core-news'
+import { runFullPipeline, fetchSingleItemFullContent } from '@auralith/core-news'
 
 type NewsDeps = {
   bundle: DbBundle
@@ -308,5 +309,12 @@ export function registerNewsHandlers(): void {
       seeded++
     }
     return { seeded }
+  })
+
+  registerHandler('news.fetchItemFullContent', async (params) => {
+    const { itemId } = NewsFetchItemFullContentParamsSchema.parse(params)
+    const { bundle } = getDeps()
+    const repo = createNewsRepo(bundle.db)
+    return fetchSingleItemFullContent(itemId, { repo })
   })
 }

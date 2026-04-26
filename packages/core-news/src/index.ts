@@ -7,9 +7,14 @@ export {
   summarizePending,
   clusterTopic,
   fetchFullContent,
+  fetchSingleItemFullContent,
   type PipelineOpts,
 } from './pipeline'
-export { fetchArticleContent, type ArticleFetchResult, type ArticleFetchOpts } from './article-fetcher'
+export {
+  fetchArticleContent,
+  type ArticleFetchResult,
+  type ArticleFetchOpts,
+} from './article-fetcher'
 export {
   SUMMARIZE_ITEM_PROMPT,
   ANALYZE_ITEM_PROMPT,

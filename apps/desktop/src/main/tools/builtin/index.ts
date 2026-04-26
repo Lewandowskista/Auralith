@@ -15,6 +15,11 @@ import { registerScreenTools } from './screen'
 import { registerBrowserTools } from './browser'
 import { makeAwarenessToolDeps, registerAwarenessTools } from './awareness'
 import { initSandboxRoots, getDefaultSandboxRoots } from '../sandbox'
+import { registerAppLauncherTools } from './app-launcher'
+import { registerVolumeTools } from './volume'
+import { registerClipboardTools } from './clipboard-tools'
+import { registerWindowManagerTools } from './window-manager'
+import { registerSystemLockTools } from './system-lock'
 
 export type BuiltinToolDeps = {
   bundle: DbBundle
@@ -50,4 +55,9 @@ export function registerBuiltinTools(deps: BuiltinToolDeps): void {
   registerScreenTools()
   registerBrowserTools()
   registerAwarenessTools(makeAwarenessToolDeps(deps.bundle))
+  registerAppLauncherTools()
+  registerVolumeTools()
+  registerClipboardTools()
+  registerWindowManagerTools()
+  registerSystemLockTools()
 }

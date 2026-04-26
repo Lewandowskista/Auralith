@@ -9,8 +9,16 @@ import {
 import type { ModelRole } from './router'
 
 const ALL_ROLES: ModelRole[] = [
-  'classifier', 'chat', 'summarize', 'extract', 'agent', 'embed',
-  'rag', 'news_synthesis', 'tool_call', 'coding',
+  'classifier',
+  'chat',
+  'summarize',
+  'extract',
+  'agent',
+  'embed',
+  'rag',
+  'news_synthesis',
+  'tool_call',
+  'coding',
 ]
 
 // ── Registry completeness ──────────────────────────────────────────────────────
@@ -36,7 +44,9 @@ describe('AI_ROLE_REGISTRY — completeness', () => {
 
   it('every role has a positive maxInputCharsRecommended', () => {
     for (const def of Object.values(AI_ROLE_REGISTRY)) {
-      expect(def.maxInputCharsRecommended, `${def.role}.maxInputCharsRecommended`).toBeGreaterThan(0)
+      expect(def.maxInputCharsRecommended, `${def.role}.maxInputCharsRecommended`).toBeGreaterThan(
+        0,
+      )
     }
   })
 })

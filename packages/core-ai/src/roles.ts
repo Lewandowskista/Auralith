@@ -105,13 +105,13 @@ export const AI_ROLE_REGISTRY: Record<ModelRole, AiRoleDefinition> = {
     alternatives: ['phi4-mini:3.8b'],
     promptTemplateId: 'chat.assistant.v1',
     contextFormat: 'markdown',
-    outputMode: 'json',       // structured speak/tool output from turn-runner
+    outputMode: 'json', // structured speak/tool output from turn-runner
     queuePriority: 'foreground',
     safetyLevel: 'medium',
     // Includes full system prompt + history + RAG context
     maxInputCharsRecommended: 12_000,
     backgroundAllowed: false,
-    strictJson: true,         // turn-runner requires JSON for speak/tool routing
+    strictJson: true, // turn-runner requires JSON for speak/tool routing
   },
 
   agent: {
@@ -120,10 +120,10 @@ export const AI_ROLE_REGISTRY: Record<ModelRole, AiRoleDefinition> = {
     defaultModel: 'qwen3:8b',
     alternatives: [],
     promptTemplateId: 'agent.plan.v1',
-    contextFormat: 'toon',    // tool catalog encoded as TOON compact records
+    contextFormat: 'toon', // tool catalog encoded as TOON compact records
     outputMode: 'json',
     queuePriority: 'foreground',
-    safetyLevel: 'high',      // agent can execute tools with real side effects
+    safetyLevel: 'high', // agent can execute tools with real side effects
     maxInputCharsRecommended: 10_000,
     backgroundAllowed: false,
     strictJson: true,
@@ -137,13 +137,13 @@ export const AI_ROLE_REGISTRY: Record<ModelRole, AiRoleDefinition> = {
     promptTemplateId: 'rag.answer.v1',
     // Short chunks → TOON records; long chunks → XML blocks; mixed → auto
     contextFormat: 'auto',
-    outputMode: 'markdown',   // streaming markdown answer with [^n] citations
+    outputMode: 'markdown', // streaming markdown answer with [^n] citations
     queuePriority: 'foreground',
     safetyLevel: 'low',
     // Retrieved chunks + query; keep tight to avoid hallucination from long context
     maxInputCharsRecommended: 10_000,
     backgroundAllowed: false,
-    strictJson: false,        // streaming markdown output, not JSON
+    strictJson: false, // streaming markdown output, not JSON
   },
 
   news_synthesis: {
@@ -153,7 +153,7 @@ export const AI_ROLE_REGISTRY: Record<ModelRole, AiRoleDefinition> = {
     // phi4-mini may miss nuance in multi-source synthesis; keep qwen3 as only option
     alternatives: [],
     promptTemplateId: 'news.digest.v1',
-    contextFormat: 'toon',    // TOON compact article list for token efficiency
+    contextFormat: 'toon', // TOON compact article list for token efficiency
     outputMode: 'json',
     queuePriority: 'background',
     safetyLevel: 'low',
@@ -169,10 +169,10 @@ export const AI_ROLE_REGISTRY: Record<ModelRole, AiRoleDefinition> = {
     defaultModel: 'qwen3:8b',
     alternatives: [],
     promptTemplateId: 'tool.call.v1',
-    contextFormat: 'toon',    // compact tool catalog, same as agent
+    contextFormat: 'toon', // compact tool catalog, same as agent
     outputMode: 'json',
     queuePriority: 'foreground',
-    safetyLevel: 'high',      // produces tool invocations with real side effects
+    safetyLevel: 'high', // produces tool invocations with real side effects
     maxInputCharsRecommended: 6_000,
     backgroundAllowed: false,
     strictJson: true,
@@ -185,9 +185,9 @@ export const AI_ROLE_REGISTRY: Record<ModelRole, AiRoleDefinition> = {
     alternatives: ['qwen3:8b'],
     promptTemplateId: 'coding.assistant.v1',
     contextFormat: 'markdown', // code + file paths in Markdown; no TOON for code
-    outputMode: 'markdown',    // code blocks; JSON only if caller requests machine output
+    outputMode: 'markdown', // code blocks; JSON only if caller requests machine output
     queuePriority: 'foreground',
-    safetyLevel: 'medium',     // may suggest shell commands — warn but don't block
+    safetyLevel: 'medium', // may suggest shell commands — warn but don't block
     maxInputCharsRecommended: 10_000,
     backgroundAllowed: false,
     strictJson: false,
@@ -199,14 +199,14 @@ export const AI_ROLE_REGISTRY: Record<ModelRole, AiRoleDefinition> = {
     defaultModel: 'nomic-embed-text',
     alternatives: [],
     promptTemplateId: 'embed.plain.v1',
-    contextFormat: 'plain',   // NO prompt wrappers — clean text only for embeddings
+    contextFormat: 'plain', // NO prompt wrappers — clean text only for embeddings
     outputMode: 'embedding',
     queuePriority: 'background',
     safetyLevel: 'low',
     // nomic-embed-text has a 2048 token context; keep well under that
     maxInputCharsRecommended: 6_000,
     backgroundAllowed: true,
-    strictJson: false,        // embedding API returns float arrays, not JSON text
+    strictJson: false, // embedding API returns float arrays, not JSON text
   },
 }
 

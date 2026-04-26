@@ -12,10 +12,6 @@ export {
   type CitationContext,
 } from './citations'
 export { rrf, topK, type RankedItem } from './rrf'
-export {
-  rerankHits,
-  createLlmReranker,
-  type Reranker,
-} from './reranker'
+export { rerankHits, createLlmReranker, type Reranker } from './reranker'
 export { mmrSelect, mmrSelectById } from './mmr'
 export { rewriteQuery } from './query-rewrite'

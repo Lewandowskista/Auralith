@@ -62,10 +62,7 @@ export {
   type AppUsageBucket,
 } from './repos/app-usage.repo'
 export { eq, and, gte, lte, desc, count, isNull, inArray, lt } from 'drizzle-orm'
-export {
-  createPromptCacheRepo,
-  type PromptCacheRepo,
-} from './repos/prompt-cache.repo'
+export { createPromptCacheRepo, type PromptCacheRepo } from './repos/prompt-cache.repo'
 export {
   createObservabilityRepo,
   type ObservabilityRepo,

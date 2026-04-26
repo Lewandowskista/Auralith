@@ -117,7 +117,7 @@ export class OllamaClient {
             if (chunk.message?.content) yield chunk.message.content
             if (chunk.done) return
           } catch {
-            // partial line — skip
+            console.warn('[ollama] skipped malformed stream line:', line.slice(0, 80))
           }
         }
       }

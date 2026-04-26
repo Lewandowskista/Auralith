@@ -98,6 +98,10 @@ export function mmrSelectById<T extends { chunkId: string; score: number }>(
     embedding: embeddingsByChunkId.get(h.chunkId) ?? [],
   }))
 
-  const selected = mmrSelect(withEmb as unknown as Array<T & { id: string; embedding: number[] }>, k, lambda)
+  const selected = mmrSelect(
+    withEmb as unknown as Array<T & { id: string; embedding: number[] }>,
+    k,
+    lambda,
+  )
   return selected as unknown as T[]
 }

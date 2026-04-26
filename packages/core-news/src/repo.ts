@@ -28,6 +28,11 @@ export function createNewsRepo(db: DbClient) {
     return db.select().from(newsFeeds).where(eq(newsFeeds.id, id)).get()
   }
 
+  // --- Items (by id) ---
+  function getItemById(itemId: string) {
+    return db.select().from(newsItems).where(eq(newsItems.id, itemId)).get()
+  }
+
   function addFeed(url: string, title: string): typeof newsFeeds.$inferSelect {
     const existing = db.select().from(newsFeeds).where(eq(newsFeeds.url, url)).get()
     if (existing) return existing
@@ -318,6 +323,7 @@ export function createNewsRepo(db: DbClient) {
     setSummary,
     setAnalysis,
     getItemsNeedingSummary,
+    getItemById,
     getItemsNeedingFullContent,
     setFullContent,
     getRecentUnclusteredItems,

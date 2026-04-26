@@ -33,7 +33,6 @@ function send(msg) {
 let modelPath = ''
 let binPath = ''
 let audioChunks = []
-let pendingFinalize = null
 
 /** Build a minimal 16-bit mono PCM WAV header + body */
 function buildWav(pcmBuffer, sampleRate = 16_000) {
@@ -208,10 +207,6 @@ parentPort.on('message', ({ data }) => {
       runTranscription()
         .then(({ text }) => {
           send({ type: 'final', text })
-          if (pendingFinalize) {
-            pendingFinalize()
-            pendingFinalize = null
-          }
         })
         .catch((err) => {
           const message = err instanceof Error ? err.message : 'Transcription error'
@@ -223,8 +218,4 @@ parentPort.on('message', ({ data }) => {
       send({ type: 'error', message: `Unknown whisper worker message: ${String(data.type)}` })
       break
   }
-})
-
-void new Promise((resolve) => {
-  pendingFinalize = resolve
 })

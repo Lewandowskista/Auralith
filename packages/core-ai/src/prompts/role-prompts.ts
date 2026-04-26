@@ -117,7 +117,7 @@ export type ToolCallOutput = z.infer<typeof ToolCallOutputSchema>
 
 export type ToolEntry = {
   id: string
-  tier: 'safe' | 'confirm' | 'restricted'
+  tier: 'safe' | 'confirm' | 'confirm-transient' | 'restricted'
   description: string
 }
 
@@ -147,23 +147,39 @@ export const TOOL_CALL_V1: PromptContract<ToolCallOutput> = {
     '- type must be "tool" or "speak".',
     '- If type is "tool", tool must be an exact id from the list — never invent tool names.',
     '- If the request is ambiguous, use type:"speak" and ask one focused question in message.',
-    '- requires_confirmation must be true for any tool with tier "confirm" or "restricted".',
-    '- args must match the tool\'s expected parameters — use {} if no args are needed.',
+    '- requires_confirmation must be true for any tool with tier "confirm", "confirm-transient", or "restricted".',
+    "- args must match the tool's expected parameters — use {} if no args are needed.",
     '- Never suggest arbitrary shell commands or file deletions without an explicit allowlisted tool.',
     '- Output ONLY valid JSON — no prose, no markdown fences.',
+    '',
+    'PC CONTROL: You can control this Windows PC using these tool prefixes:',
+    '- app.launch / app.close / app.list: open or close any installed application',
+    '- browser.navigate / browser.search / browser.click / browser.type / browser.playVideo: control Chrome via CDP',
+    '- volume.set / volume.mute / volume.get: control system volume',
+    '- media.play / media.next / media.prev: send media playback keys',
+    '- window.list / window.minimize / window.maximize / window.restore / window.focus / window.close: manage windows',
+    '- clipboard.read / clipboard.write: access clipboard',
+    '- screen.lock / system.sleep: lock or sleep the PC (restricted — requires explicit confirmation)',
+    '',
+    'Multi-step browser tasks: call browser.search first, then browser.playVideo in a follow-up turn.',
+    'Do not chain more than one browser.* tool call per turn.',
   ].join('\n'),
   userTemplate: (ctx) => ctx['body'] ?? '',
   outputSchema: ToolCallOutputSchema,
-  maxTokens: 256,
+  maxTokens: 320,
   temperature: 0,
 }
 
 // ── Coding ────────────────────────────────────────────────────────────────────
 // Role: coding | Model: qwen2.5-coder:7b (all presets)
 //
-// Produces Markdown code output by default. Structured JSON output is only
-// produced when the caller explicitly passes outputJson:true in context,
-// which triggers the JSON-output variant of the prompt.
+// Streams Markdown directly — code blocks, explanations, warnings inline.
+// Plugs into runCodingTurn() which bypasses the JSON turn-runner and streams
+// raw tokens directly to the renderer, same as a RAG answer.
+//
+// The structured JSON variant (CODING_ASSISTANT_V1) is kept for pipeline use
+// (batch code generation, tool integration). The streaming path uses
+// CODING_SYSTEM_PROMPT + the raw user message.
 
 export const CodingStructuredOutputSchema = z.object({
   code: z.string(),
@@ -174,7 +190,31 @@ export const CodingStructuredOutputSchema = z.object({
 
 export type CodingStructuredOutput = z.infer<typeof CodingStructuredOutputSchema>
 
-// Markdown variant (default) — no Zod schema; caller handles raw string.
+/** System prompt for the streaming coding path (runCodingTurn). */
+export const CODING_SYSTEM_PROMPT = [
+  'You are an expert coding assistant powered by Qwen2.5-Coder.',
+  'You help with code generation, debugging, refactoring, scripting, and technical explanations.',
+  '',
+  'Guidelines:',
+  '- Always produce complete, runnable code — never leave TODOs or fragments unless explicitly asked.',
+  '- Use proper Markdown: fenced code blocks with the correct language tag (```python, ```typescript, etc.).',
+  '- Explain what the code does in 1–3 sentences after each block.',
+  '- If multiple approaches exist, briefly mention trade-offs then recommend one.',
+  '- State any assumptions (OS, runtime version, library version) explicitly.',
+  '- For shell or PowerShell commands, note side effects and reversibility.',
+  '- Warn about destructive operations, privilege requirements, or security considerations.',
+  '- Prefer idiomatic, safe patterns. Avoid deprecated APIs.',
+  '- Keep explanations concise — code first, prose second.',
+  '- If the request is ambiguous, answer the most likely interpretation and note what you assumed.',
+].join('\n')
+
+/** Context block injected when the user has relevant knowledge chunks. */
+export function buildCodingContextBlock(ragChunks: string): string {
+  if (!ragChunks.trim()) return ''
+  return `\n\n## Relevant context from your knowledge base\n\n${ragChunks}\n`
+}
+
+// Structured JSON variant — kept for batch/pipeline callers.
 export const CODING_ASSISTANT_V1: PromptContract<CodingStructuredOutput> = {
   id: 'coding.assistant.v1',
   role: 'coding',
@@ -252,16 +292,7 @@ export const EXTRACT_GENERIC_V1: PromptContract<ExtractGenericOutput> = {
 // to ROUTE_CLASSIFY_V1 for the richer routing label set.
 
 export const RouteClassifyOutputSchema = z.object({
-  intent: z.enum([
-    'chat',
-    'tool',
-    'news',
-    'rag',
-    'coding',
-    'routine',
-    'settings',
-    'unknown',
-  ]),
+  intent: z.enum(['chat', 'tool', 'news', 'rag', 'coding', 'routine', 'settings', 'unknown']),
   confidence: z.number().min(0).max(1),
   requires_clarification: z.boolean(),
   clarifying_question: z.string().nullable(),
@@ -278,7 +309,8 @@ export const ROUTE_CLASSIFY_V1: PromptContract<RouteClassifyOutput> = {
     'Classify the user message into exactly one intent. Reply with JSON only.',
     'Allowed intents: chat, tool, news, rag, coding, routine, settings, unknown.',
     'Do not invent new intent labels.',
-    'risk: low=read-only, medium=writes data, high=deletes/installs/sends/executes.',
+    'risk: low=read-only, medium=writes data or controls apps/volume/windows, high=deletes/installs/sends/executes/locks/sleeps.',
+    'PC control requests (open app, search browser, play video, set volume, lock screen, etc.) are always intent:tool.',
     'If ambiguous, set requires_clarification:true and provide one focused clarifying_question.',
     'reason: one sentence max explaining the classification.',
   ].join('\n'),

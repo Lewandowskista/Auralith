@@ -48,10 +48,21 @@ function statKey(model: string, role: ModelRole, promptTemplateId: string): stri
   return `${model}::${role}::${promptTemplateId}`
 }
 
-function getOrCreateStat(model: string, role: ModelRole, promptTemplateId: string): JsonReliabilityStat {
+const STATS_MAP_MAX = 1_000
+
+function getOrCreateStat(
+  model: string,
+  role: ModelRole,
+  promptTemplateId: string,
+): JsonReliabilityStat {
   const key = statKey(model, role, promptTemplateId)
   let stat = _reliabilityStats.get(key)
   if (!stat) {
+    if (_reliabilityStats.size >= STATS_MAP_MAX) {
+      // Evict the oldest entry to keep the map bounded
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      _reliabilityStats.delete(_reliabilityStats.keys().next().value!)
+    }
     stat = {
       model,
       role,
@@ -95,10 +106,7 @@ export type ReliabilityFlusher = {
  * Starts a recurring flush of in-memory reliability stats into the provided repo.
  * Resets in-memory counters after each flush. Returns a cancel function.
  */
-export function flushReliabilityToRepo(
-  repo: ReliabilityFlusher,
-  intervalMs = 60_000,
-): () => void {
+export function flushReliabilityToRepo(repo: ReliabilityFlusher, intervalMs = 60_000): () => void {
   const flush = (): void => {
     const now = Date.now()
     const hourBucket = Math.floor(now / (60 * 60 * 1000))
@@ -230,16 +238,21 @@ export async function runPrompt<TOut>(
   // something actionable rather than the useless string "object".
   let schemaHint: string
   try {
-    const shape = (contract.outputSchema as { _def?: { shape?: unknown } })._def?.shape
-    schemaHint = shape
-      ? JSON.stringify(
-          Object.fromEntries(
-            Object.entries(shape as Record<string, { _def?: { typeName?: string } }>).map(
-              ([k, v]) => [k, v?._def?.typeName ?? 'unknown'],
+    const schemaDef = (contract.outputSchema as unknown as Record<string, unknown>)['_def']
+    const shape =
+      schemaDef !== null && typeof schemaDef === 'object' && 'shape' in (schemaDef as object)
+        ? (schemaDef as { shape: unknown }).shape
+        : null
+    schemaHint =
+      shape !== null && typeof shape === 'object'
+        ? JSON.stringify(
+            Object.fromEntries(
+              Object.entries(shape as Record<string, { _def?: { typeName?: string } }>).map(
+                ([k, v]) => [k, v?._def?.typeName ?? 'unknown'],
+              ),
             ),
-          ),
-        )
-      : contract.id
+          )
+        : contract.id
   } catch {
     schemaHint = contract.id
   }

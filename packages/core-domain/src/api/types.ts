@@ -19,7 +19,7 @@ export type IpcRequest = z.infer<typeof IpcRequestSchema>
 export type IpcResponse = z.infer<typeof IpcResponseSchema>
 
 // Permission tiers
-export const PermissionTierSchema = z.enum(['safe', 'confirm', 'restricted'])
+export const PermissionTierSchema = z.enum(['safe', 'confirm', 'confirm-transient', 'restricted'])
 export type PermissionTier = z.infer<typeof PermissionTierSchema>
 
 // Activity event kinds

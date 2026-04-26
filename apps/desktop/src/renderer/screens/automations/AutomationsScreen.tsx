@@ -16,13 +16,16 @@ import {
   Store,
   Download,
   Loader2,
+  Headphones,
+  Image,
+  FileText,
+  Filter,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { Routine } from '@auralith/core-domain'
 import { FadeRise } from '@auralith/design-system'
 import { RoutineEditor } from './RoutineEditor'
 import { RoutineHistoryPanel } from './RoutineHistoryPanel'
-import { ScreenShell } from '../../components/ScreenShell'
 
 type ExampleRoutine = {
   id: string
@@ -73,6 +76,155 @@ function triggerLabel(trigger: Routine['trigger']): string {
   }
 }
 
+function GhostBtn({
+  children,
+  icon,
+  onClick,
+  disabled,
+  active,
+}: {
+  children?: React.ReactNode
+  icon?: ReactElement
+  onClick?: () => void
+  disabled?: boolean
+  active?: boolean
+}): ReactElement {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: children ? '6px 12px' : '6px 8px',
+        borderRadius: 10,
+        fontSize: 12,
+        fontWeight: 500,
+        border: `1px solid ${active ? 'var(--color-border-accent)' : 'var(--color-border-hairline)'}`,
+        background: active ? 'rgba(139,92,246,0.12)' : 'rgba(255,255,255,0.04)',
+        color: active ? 'var(--color-accent-mid)' : 'var(--color-text-secondary)',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+        transition: 'all 140ms ease',
+        fontFamily: 'var(--font-sans)',
+      }}
+      onMouseEnter={(e) => {
+        if (!disabled) {
+          e.currentTarget.style.background = 'rgba(255,255,255,0.07)'
+          e.currentTarget.style.color = 'var(--color-text-primary)'
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (!disabled) {
+          e.currentTarget.style.background = active
+            ? 'rgba(139,92,246,0.12)'
+            : 'rgba(255,255,255,0.04)'
+          e.currentTarget.style.color = active
+            ? 'var(--color-accent-mid)'
+            : 'var(--color-text-secondary)'
+        }
+      }}
+    >
+      {icon}
+      {children}
+    </button>
+  )
+}
+
+function StatTile({
+  label,
+  value,
+  sub,
+  accent,
+  chip,
+}: {
+  label: string
+  value: React.ReactNode
+  sub?: string
+  accent?: boolean
+  chip?: React.ReactNode
+}): ReactElement {
+  return (
+    <div
+      style={{
+        padding: 16,
+        borderRadius: 14,
+        border: `1px solid ${accent ? 'rgba(139,92,246,0.2)' : 'var(--color-border-hairline)'}`,
+        background: accent ? 'rgba(139,92,246,0.06)' : 'rgba(18,18,26,0.72)',
+        backdropFilter: 'blur(12px)',
+        WebkitBackdropFilter: 'blur(12px)',
+        display: 'flex',
+        flexDirection: 'column' as const,
+        gap: 4,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 9,
+          fontWeight: 700,
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase' as const,
+          color: 'var(--color-text-tertiary)',
+          fontFamily: 'var(--font-mono)',
+          marginBottom: 4,
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+        <span
+          style={{
+            fontFamily: 'var(--font-display)',
+            fontSize: 30,
+            fontWeight: 500,
+            lineHeight: 1,
+            color: accent ? 'var(--color-accent-high)' : 'var(--color-text-primary)',
+          }}
+        >
+          {value}
+        </span>
+        {chip}
+      </div>
+      {sub && (
+        <div
+          style={{
+            fontSize: 10,
+            color: 'var(--color-text-tertiary)',
+            fontFamily: 'var(--font-sans)',
+          }}
+        >
+          {sub}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const GALLERY_RECIPES = [
+  {
+    id: 'focus-winddown',
+    title: 'Focus wind-down',
+    sub: 'When focus session ends, dim ether and queue a 2-minute voice summary.',
+    icon: <Headphones size={14} />,
+    color: '#8b5cf6',
+  },
+  {
+    id: 'photo-sort',
+    title: 'Photo sort',
+    sub: 'New screenshots → OCR, tag, and file under a best-guess project.',
+    icon: <Image size={14} />,
+    color: '#38bdf8',
+  },
+  {
+    id: 'eod-snapshot',
+    title: 'End-of-day snapshot',
+    sub: 'At 18:00, capture unresolved threads, TODOs, and open tabs into a note.',
+    icon: <FileText size={14} />,
+    color: '#34d399',
+  },
+]
+
 export function AutomationsScreen(): ReactElement {
   const [tab, setTab] = useState<'mine' | 'browse'>('mine')
   const prevTabRef = useRef<'mine' | 'browse'>('mine')
@@ -82,6 +234,7 @@ export function AutomationsScreen(): ReactElement {
   const [editingRoutine, setEditingRoutine] = useState<Routine | null>(null)
   const [historyFor, setHistoryFor] = useState<Routine | null>(null)
   const [runningId, setRunningId] = useState<string | null>(null)
+  const [routineFilter, setRoutineFilter] = useState<'all' | 'enabled' | 'disabled'>('all')
 
   const loadRoutines = useCallback(async () => {
     setLoading(true)
@@ -149,34 +302,181 @@ export function AutomationsScreen(): ReactElement {
     void loadRoutines()
   }, [loadRoutines])
 
+  const activeCount = routines.filter((r) => r.enabled).length
+  const totalRuns = routines.reduce((s, r) => s + (r.runCount ?? 0), 0)
+  const pendingConfirm = routines.filter((r) => r.lastStatus === 'blocked').length
+
   return (
-    <ScreenShell
-      title="Automations"
-      {...(routines.length > 0 && {
-        subtitle: `${routines.filter((r) => r.enabled).length} active`,
-      })}
-      variant="split"
-      actions={
-        <motion.button
-          data-testid="routine-create-btn"
-          whileTap={{ scale: 0.95 }}
-          onClick={() => {
-            setEditingRoutine(null)
-            setEditorOpen(true)
-          }}
-          className="flex items-center gap-2 rounded-xl border border-[var(--color-border-accent)] bg-[var(--color-accent-low)]/20 px-3.5 py-1.5 text-sm font-medium text-[var(--color-accent-mid)] transition-colors hover:bg-[var(--color-accent-low)]/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent-low)]"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          New routine
-        </motion.button>
-      }
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        overflow: 'hidden',
+        padding: '28px 28px 0',
+      }}
     >
+      {/* Narrative header */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, ease: [0.2, 0.8, 0.2, 1] }}
+        style={{ marginBottom: 20, flexShrink: 0 }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: 16,
+          }}
+        >
+          <div>
+            <h1
+              style={{
+                fontFamily: 'var(--font-display)',
+                fontSize: 32,
+                fontWeight: 500,
+                letterSpacing: '-0.02em',
+                lineHeight: 1.1,
+                marginBottom: 6,
+                color: 'var(--color-text-primary)',
+              }}
+            >
+              Quiet{' '}
+              <em style={{ fontStyle: 'italic', color: 'var(--color-accent-mid)' }}>helpers</em>
+            </h1>
+            <p
+              style={{
+                fontSize: 13,
+                color: 'var(--color-text-tertiary)',
+                fontFamily: 'var(--font-sans)',
+              }}
+            >
+              {activeCount} of {routines.length} enabled
+              {totalRuns > 0 ? ` · ${totalRuns.toLocaleString()} total runs` : ''}
+              {' · all local'}
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', paddingTop: 4 }}>
+            <GhostBtn
+              icon={<History size={12} />}
+              onClick={() => {
+                const mostRecent = routines.find((r) => r.lastRunAt)
+                if (mostRecent) setHistoryFor(mostRecent)
+                else toast.info('No run history yet — trigger a routine first')
+              }}
+            >
+              History
+            </GhostBtn>
+            <GhostBtn
+              icon={<Store size={12} />}
+              onClick={() => setTab('browse')}
+              active={tab === 'browse'}
+            >
+              Gallery
+            </GhostBtn>
+            <motion.button
+              data-testid="routine-create-btn"
+              whileTap={{ scale: 0.95 }}
+              onClick={() => {
+                setEditingRoutine(null)
+                setEditorOpen(true)
+              }}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '6px 14px',
+                borderRadius: 10,
+                fontSize: 12,
+                fontWeight: 600,
+                border: '1px solid rgba(139,92,246,0.35)',
+                background: 'var(--color-accent-gradient)',
+                color: '#fff',
+                cursor: 'pointer',
+                fontFamily: 'var(--font-sans)',
+              }}
+            >
+              <Plus size={12} />
+              New automation
+            </motion.button>
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Stat tiles */}
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.28, delay: 0.06, ease: [0.2, 0.8, 0.2, 1] }}
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+          gap: 12,
+          marginBottom: 20,
+          flexShrink: 0,
+        }}
+      >
+        <StatTile
+          label="Active"
+          value={
+            <>
+              {activeCount}
+              <span
+                style={{
+                  fontFamily: 'var(--font-display)',
+                  fontSize: 16,
+                  color: 'var(--color-text-tertiary)',
+                  fontWeight: 400,
+                }}
+              >
+                /{routines.length}
+              </span>
+            </>
+          }
+          sub="automations running"
+        />
+        <StatTile label="Runs today" value={Math.min(totalRuns, 99)} sub="across all routines" />
+        <StatTile label="Time saved" value="—" sub="est. this week" />
+        <StatTile
+          label="Awaiting you"
+          value={pendingConfirm}
+          sub={pendingConfirm === 1 ? 'needs confirmation' : 'nothing pending'}
+          accent={pendingConfirm > 0}
+          chip={
+            pendingConfirm > 0 ? (
+              <span
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  borderRadius: 6,
+                  background: 'rgba(251,191,36,0.15)',
+                  border: '1px solid rgba(251,191,36,0.3)',
+                  color: '#fbbf24',
+                  fontFamily: 'var(--font-sans)',
+                }}
+              >
+                confirm
+              </span>
+            ) : undefined
+          }
+        />
+      </motion.div>
+
       {/* Tab bar */}
       <div
-        className="flex items-center gap-1 px-8 py-0"
         style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
           borderBottom: '1px solid var(--color-border-hairline)',
           background: 'rgba(14,14,20,0.40)',
+          flexShrink: 0,
+          marginLeft: -28,
+          marginRight: -28,
+          paddingLeft: 28,
         }}
       >
         {(['mine', 'browse'] as const).map((t) => (
@@ -186,17 +486,36 @@ export function AutomationsScreen(): ReactElement {
               prevTabRef.current = tab
               setTab(t)
             }}
-            className="relative flex items-center gap-1.5 px-4 py-3 text-sm font-medium transition-colors"
             style={{
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '10px 16px',
+              fontSize: 13,
+              fontWeight: 500,
+              fontFamily: 'var(--font-sans)',
               color: tab === t ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              transition: 'color 140ms ease',
             }}
           >
-            {t === 'mine' ? <Zap className="h-3.5 w-3.5" /> : <Store className="h-3.5 w-3.5" />}
+            {t === 'mine' ? <Zap size={14} /> : <Store size={14} />}
             {t === 'mine' ? 'My Routines' : 'Browse'}
             {tab === t && (
               <motion.div
                 layoutId="routines-tab-underline"
-                className="absolute bottom-0 left-0 right-0 h-[2px] rounded-full bg-violet-500"
+                style={{
+                  position: 'absolute',
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  height: 2,
+                  borderRadius: 999,
+                  background: 'var(--color-accent-gradient)',
+                }}
               />
             )}
           </button>
@@ -204,9 +523,9 @@ export function AutomationsScreen(): ReactElement {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div style={{ flex: 1, overflowY: 'auto' }}>
         <TabContent tabKey={tab} direction={tab === 'browse' ? 1 : -1}>
-          <div className="px-8 py-6">
+          <div style={{ padding: '24px 0 28px' }}>
             {tab === 'browse' ? (
               <MarketplacePanel
                 onInstalled={() => {
@@ -215,38 +534,388 @@ export function AutomationsScreen(): ReactElement {
                   setTab('mine')
                 }}
               />
-            ) : loading ? (
-              <div className="flex items-center justify-center h-32">
-                <div className="h-1 w-16 overflow-hidden rounded-full bg-white/10">
-                  <motion.div
-                    className="h-full rounded-full bg-violet-500/60"
-                    animate={{ x: ['-100%', '100%'] }}
-                    transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
-                  />
+            ) : (
+              /* Mine tab — 2-col layout */
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(0, 1.55fr) minmax(0, 1fr)',
+                  gap: 20,
+                  alignItems: 'start',
+                }}
+              >
+                {/* Left: routines list */}
+                <div>
+                  {/* Section header */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      marginBottom: 12,
+                    }}
+                  >
+                    <div>
+                      <div
+                        style={{
+                          fontSize: 9,
+                          fontWeight: 700,
+                          letterSpacing: '0.12em',
+                          textTransform: 'uppercase',
+                          color: 'var(--color-text-tertiary)',
+                          fontFamily: 'var(--font-mono)',
+                          marginBottom: 2,
+                        }}
+                      >
+                        Your automations
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 600,
+                          color: 'var(--color-text-primary)',
+                          fontFamily: 'var(--font-sans)',
+                        }}
+                      >
+                        Enabled first
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <GhostBtn
+                        icon={<Filter size={11} />}
+                        active={routineFilter !== 'all'}
+                        onClick={() =>
+                          setRoutineFilter((f) =>
+                            f === 'all' ? 'enabled' : f === 'enabled' ? 'disabled' : 'all',
+                          )
+                        }
+                      >
+                        {routineFilter === 'all'
+                          ? 'All'
+                          : routineFilter === 'enabled'
+                            ? 'Active'
+                            : 'Disabled'}
+                      </GhostBtn>
+                    </div>
+                  </div>
+
+                  {loading ? (
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        height: 128,
+                      }}
+                    >
+                      <div
+                        style={{
+                          height: 4,
+                          width: 64,
+                          overflow: 'hidden',
+                          borderRadius: 999,
+                          background: 'rgba(255,255,255,0.08)',
+                        }}
+                      >
+                        <motion.div
+                          style={{
+                            height: '100%',
+                            borderRadius: 999,
+                            background: 'rgba(139,92,246,0.6)',
+                          }}
+                          animate={{ x: ['-100%', '100%'] }}
+                          transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+                        />
+                      </div>
+                    </div>
+                  ) : routines.length === 0 ? (
+                    <AutomationsEmpty onNew={() => setEditorOpen(true)} />
+                  ) : (
+                    <FadeRise>
+                      <div
+                        data-testid="routines-list"
+                        style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
+                      >
+                        {[...routines]
+                          .filter(
+                            (r) =>
+                              routineFilter === 'all' ||
+                              (routineFilter === 'enabled' ? r.enabled : !r.enabled),
+                          )
+                          .sort((a, b) => (b.enabled ? 1 : 0) - (a.enabled ? 1 : 0))
+                          .map((r) => (
+                            <RoutineCard
+                              key={r.id}
+                              routine={r}
+                              running={runningId === r.id}
+                              onToggle={() => void handleToggleEnabled(r)}
+                              onRun={() => void handleRun(r)}
+                              onEdit={() => {
+                                setEditingRoutine(r)
+                                setEditorOpen(true)
+                              }}
+                              onDelete={() => void handleDelete(r.id)}
+                              onHistory={() => setHistoryFor(r)}
+                            />
+                          ))}
+                      </div>
+                    </FadeRise>
+                  )}
+                </div>
+
+                {/* Right: recent runs + gallery */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                  {/* Recent runs */}
+                  <div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        marginBottom: 10,
+                      }}
+                    >
+                      <div>
+                        <div
+                          style={{
+                            fontSize: 9,
+                            fontWeight: 700,
+                            letterSpacing: '0.12em',
+                            textTransform: 'uppercase',
+                            color: 'var(--color-text-tertiary)',
+                            fontFamily: 'var(--font-mono)',
+                            marginBottom: 2,
+                          }}
+                        >
+                          Recent runs
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 600,
+                            color: 'var(--color-text-primary)',
+                            fontFamily: 'var(--font-sans)',
+                          }}
+                        >
+                          Last 7 days
+                        </div>
+                      </div>
+                      <GhostBtn
+                        onClick={() => {
+                          const r = routines.find((x) => x.lastRunAt)
+                          if (r) setHistoryFor(r)
+                          else toast.info('No run history yet')
+                        }}
+                      >
+                        See all
+                      </GhostBtn>
+                    </div>
+                    <div
+                      style={{
+                        borderRadius: 14,
+                        border: '1px solid var(--color-border-hairline)',
+                        background: 'rgba(18,18,26,0.72)',
+                        backdropFilter: 'blur(12px)',
+                        WebkitBackdropFilter: 'blur(12px)',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {routines.length === 0 ? (
+                        <div
+                          style={{
+                            padding: '16px 16px',
+                            textAlign: 'center',
+                            fontSize: 12,
+                            color: 'var(--color-text-tertiary)',
+                            fontFamily: 'var(--font-sans)',
+                          }}
+                        >
+                          No runs yet
+                        </div>
+                      ) : (
+                        routines.slice(0, 5).map((r, i) => (
+                          <div
+                            key={r.id}
+                            style={{
+                              display: 'grid',
+                              gridTemplateColumns: '10px minmax(0, 1fr) 60px',
+                              alignItems: 'center',
+                              gap: 12,
+                              padding: '10px 16px',
+                              borderBottom:
+                                i < Math.min(routines.length, 5) - 1
+                                  ? '1px solid var(--color-border-hairline)'
+                                  : 'none',
+                              fontSize: 12,
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: 7,
+                                height: 7,
+                                borderRadius: '50%',
+                                background:
+                                  r.lastStatus === 'success'
+                                    ? '#34d399'
+                                    : r.lastStatus === 'failure'
+                                      ? '#f87171'
+                                      : 'rgba(255,255,255,0.2)',
+                                boxShadow:
+                                  r.lastStatus === 'success'
+                                    ? '0 0 8px rgba(52,211,153,0.55)'
+                                    : r.lastStatus === 'failure'
+                                      ? '0 0 8px rgba(248,113,113,0.55)'
+                                      : 'none',
+                                flexShrink: 0,
+                              }}
+                            />
+                            <div
+                              style={{
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                                color: 'var(--color-text-primary)',
+                                fontWeight: 500,
+                                fontFamily: 'var(--font-sans)',
+                              }}
+                            >
+                              {r.name}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: 10,
+                                fontFamily: 'var(--font-mono)',
+                                color: 'var(--color-text-tertiary)',
+                                textAlign: 'right',
+                              }}
+                            >
+                              {r.runCount ?? 0} runs
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Gallery */}
+                  <div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        marginBottom: 10,
+                      }}
+                    >
+                      <div>
+                        <div
+                          style={{
+                            fontSize: 9,
+                            fontWeight: 700,
+                            letterSpacing: '0.12em',
+                            textTransform: 'uppercase',
+                            color: 'var(--color-text-tertiary)',
+                            fontFamily: 'var(--font-mono)',
+                            marginBottom: 2,
+                          }}
+                        >
+                          Gallery
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 600,
+                            color: 'var(--color-text-primary)',
+                            fontFamily: 'var(--font-sans)',
+                          }}
+                        >
+                          Ideas to add
+                        </div>
+                      </div>
+                      <GhostBtn onClick={() => setTab('browse')}>Browse</GhostBtn>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {GALLERY_RECIPES.map((recipe) => (
+                        <button
+                          key={recipe.id}
+                          onClick={() => setTab('browse')}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 12,
+                            padding: 14,
+                            borderRadius: 12,
+                            border: '1px solid var(--color-border-hairline)',
+                            background: 'rgba(18,18,26,0.72)',
+                            backdropFilter: 'blur(12px)',
+                            WebkitBackdropFilter: 'blur(12px)',
+                            cursor: 'pointer',
+                            textAlign: 'left',
+                            width: '100%',
+                            transition: 'border-color 140ms ease, background 140ms ease',
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.borderColor = 'var(--color-border-subtle)'
+                            e.currentTarget.style.background = 'rgba(255,255,255,0.03)'
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.borderColor = 'var(--color-border-hairline)'
+                            e.currentTarget.style.background = 'rgba(18,18,26,0.72)'
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: 34,
+                              height: 34,
+                              borderRadius: 10,
+                              background: `${recipe.color}18`,
+                              border: `1px solid ${recipe.color}30`,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              color: recipe.color,
+                              flexShrink: 0,
+                            }}
+                          >
+                            {recipe.icon}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div
+                              style={{
+                                fontSize: 12,
+                                fontWeight: 600,
+                                color: 'var(--color-text-primary)',
+                                fontFamily: 'var(--font-sans)',
+                                marginBottom: 2,
+                              }}
+                            >
+                              {recipe.title}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: 11,
+                                color: 'var(--color-text-tertiary)',
+                                fontFamily: 'var(--font-sans)',
+                                lineHeight: 1.4,
+                                display: '-webkit-box',
+                                WebkitLineClamp: 2,
+                                WebkitBoxOrient: 'vertical',
+                                overflow: 'hidden',
+                              }}
+                            >
+                              {recipe.sub}
+                            </div>
+                          </div>
+                          <Plus
+                            size={14}
+                            style={{ color: 'var(--color-text-tertiary)', flexShrink: 0 }}
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
-            ) : routines.length === 0 ? (
-              <EmptyState onNew={() => setEditorOpen(true)} />
-            ) : (
-              <FadeRise>
-                <div data-testid="routines-list" className="space-y-3">
-                  {routines.map((r) => (
-                    <RoutineCard
-                      key={r.id}
-                      routine={r}
-                      running={runningId === r.id}
-                      onToggle={() => void handleToggleEnabled(r)}
-                      onRun={() => void handleRun(r)}
-                      onEdit={() => {
-                        setEditingRoutine(r)
-                        setEditorOpen(true)
-                      }}
-                      onDelete={() => void handleDelete(r.id)}
-                      onHistory={() => setHistoryFor(r)}
-                    />
-                  ))}
-                </div>
-              </FadeRise>
             )}
           </div>
         </TabContent>
@@ -272,30 +941,84 @@ export function AutomationsScreen(): ReactElement {
           <RoutineHistoryPanel routine={historyFor} onClose={() => setHistoryFor(null)} />
         )}
       </AnimatePresence>
-    </ScreenShell>
+    </div>
   )
 }
 
 // ── Sub-components ──────────────────────────────────────────────────────────
 
-function EmptyState({ onNew }: { onNew: () => void }): ReactElement {
+function AutomationsEmpty({ onNew }: { onNew: () => void }): ReactElement {
   return (
     <div
       data-testid="routines-empty"
-      className="flex flex-col items-center justify-center h-64 text-center gap-4"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: 256,
+        textAlign: 'center',
+        gap: 16,
+      }}
     >
-      <div className="flex items-center justify-center w-12 h-12 rounded-2xl bg-violet-500/10 text-violet-400">
-        <Zap className="h-6 w-6" />
+      <div
+        style={{
+          width: 52,
+          height: 52,
+          borderRadius: 16,
+          background: 'rgba(139,92,246,0.10)',
+          border: '1px solid rgba(139,92,246,0.2)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--color-accent-mid)',
+        }}
+      >
+        <Zap size={24} />
       </div>
       <div>
-        <p className="text-sm font-medium text-[var(--color-text-primary)]">No automations yet</p>
-        <p className="text-sm text-[var(--color-text-tertiary)] mt-1 max-w-xs">
+        <p
+          style={{
+            fontSize: 14,
+            fontWeight: 600,
+            color: 'var(--color-text-primary)',
+            fontFamily: 'var(--font-sans)',
+            marginBottom: 4,
+          }}
+        >
+          No automations yet
+        </p>
+        <p
+          style={{
+            fontSize: 13,
+            color: 'var(--color-text-tertiary)',
+            fontFamily: 'var(--font-sans)',
+            maxWidth: 280,
+          }}
+        >
           Create a routine to automatically run actions when conditions are met.
         </p>
       </div>
       <button
         onClick={onNew}
-        className="px-4 py-2 rounded-lg text-sm font-medium bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 transition-colors"
+        style={{
+          padding: '8px 18px',
+          borderRadius: 10,
+          fontSize: 13,
+          fontWeight: 600,
+          border: '1px solid rgba(139,92,246,0.35)',
+          background: 'rgba(139,92,246,0.15)',
+          color: 'var(--color-accent-mid)',
+          cursor: 'pointer',
+          fontFamily: 'var(--font-sans)',
+          transition: 'all 140ms ease',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = 'rgba(139,92,246,0.25)'
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = 'rgba(139,92,246,0.15)'
+        }}
       >
         Create your first routine
       </button>
@@ -329,16 +1052,16 @@ function RoutineCard({
       data-testid="routine-row"
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      whileHover={{ scale: 1.015, y: -1 }}
-      whileTap={{ scale: 0.98 }}
-      className="group relative"
+      className="group"
       style={{
         borderRadius: 14,
         border: '1px solid var(--color-border-hairline)',
-        background: 'rgba(20,20,28,0.80)',
-        backdropFilter: 'blur(8px)',
-        WebkitBackdropFilter: 'blur(8px)',
-        padding: '16px 20px',
+        background: 'rgba(18,18,26,0.72)',
+        backdropFilter: 'blur(12px)',
+        WebkitBackdropFilter: 'blur(12px)',
+        padding: '14px 16px',
+        opacity: routine.enabled ? 1 : 0.72,
+        transition: 'border-color 140ms ease, opacity 200ms ease',
       }}
       onMouseEnter={(e: React.MouseEvent<HTMLDivElement>) => {
         e.currentTarget.style.borderColor = 'var(--color-border-subtle)'
@@ -347,52 +1070,118 @@ function RoutineCard({
         e.currentTarget.style.borderColor = 'var(--color-border-hairline)'
       }}
     >
-      <div className="flex items-start gap-4">
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
         {/* Enable toggle */}
         <button
           onClick={onToggle}
-          className={[
-            'mt-0.5 flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors',
-            routine.enabled
-              ? 'bg-violet-500/15 text-violet-400 hover:bg-violet-500/25'
-              : 'bg-white/5 text-[var(--color-text-tertiary)] hover:bg-white/10',
-          ].join(' ')}
+          style={{
+            flexShrink: 0,
+            marginTop: 2,
+            width: 32,
+            height: 32,
+            borderRadius: 10,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: `1px solid ${routine.enabled ? 'rgba(139,92,246,0.3)' : 'var(--color-border-hairline)'}`,
+            background: routine.enabled ? 'rgba(139,92,246,0.12)' : 'rgba(255,255,255,0.04)',
+            color: routine.enabled ? 'var(--color-accent-mid)' : 'var(--color-text-tertiary)',
+            cursor: 'pointer',
+            transition: 'all 140ms ease',
+          }}
           title={routine.enabled ? 'Disable' : 'Enable'}
         >
-          <Zap className="h-4 w-4" strokeWidth={routine.enabled ? 2 : 1.5} />
+          <Zap size={14} strokeWidth={routine.enabled ? 2 : 1.5} />
         </button>
 
         {/* Info */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-[var(--color-text-primary)] truncate">
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              marginBottom: 4,
+              flexWrap: 'wrap',
+            }}
+          >
+            <span
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: 'var(--color-text-primary)',
+                fontFamily: 'var(--font-sans)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
               {routine.name}
             </span>
             {lastStatus && STATUS_ICON[lastStatus]}
             {!routine.enabled && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.06] text-[var(--color-text-tertiary)]">
+              <span
+                style={{
+                  fontSize: 10,
+                  padding: '2px 6px',
+                  borderRadius: 5,
+                  background: 'rgba(255,255,255,0.06)',
+                  color: 'var(--color-text-tertiary)',
+                  fontFamily: 'var(--font-mono)',
+                }}
+              >
                 disabled
               </span>
             )}
           </div>
-          <div className="flex items-center gap-3 mt-1">
-            <span className="text-xs text-[var(--color-text-tertiary)] flex items-center gap-1">
-              <Clock className="h-3 w-3" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span
+              style={{
+                fontSize: 11,
+                color: 'var(--color-text-tertiary)',
+                fontFamily: 'var(--font-sans)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+              }}
+            >
+              <Clock size={11} />
               {triggerLabel(routine.trigger)}
             </span>
-            <span className="text-xs text-[var(--color-text-tertiary)]">
+            <span
+              style={{
+                fontSize: 11,
+                color: 'var(--color-text-tertiary)',
+                fontFamily: 'var(--font-sans)',
+              }}
+            >
               → {routine.action.toolId}
             </span>
           </div>
           {routine.lastRunAt && (
-            <p className="text-[11px] text-[var(--color-text-tertiary)]/60 mt-1">
+            <p
+              style={{
+                fontSize: 11,
+                color: 'rgba(255,255,255,0.3)',
+                marginTop: 4,
+                fontFamily: 'var(--font-sans)',
+              }}
+            >
               Last run {new Date(routine.lastRunAt).toLocaleString()} · {routine.runCount} runs
             </p>
           )}
         </div>
 
-        {/* Actions */}
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        {/* Actions — visible on hover */}
+        <div
+          className="opacity-0 group-hover:opacity-100"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            transition: 'opacity 140ms ease',
+          }}
+        >
           <ActionBtn
             data-testid="routine-run-btn"
             title="Run now"
@@ -401,22 +1190,28 @@ function RoutineCard({
           >
             {running ? (
               <motion.div
-                className="h-3.5 w-3.5 border border-violet-400/60 border-t-transparent rounded-full"
+                style={{
+                  width: 14,
+                  height: 14,
+                  border: '1.5px solid rgba(139,92,246,0.6)',
+                  borderTopColor: 'transparent',
+                  borderRadius: '50%',
+                }}
                 animate={{ rotate: 360 }}
                 transition={{ duration: 0.8, repeat: Infinity, ease: 'linear' }}
               />
             ) : (
-              <Play className="h-3.5 w-3.5" />
+              <Play size={13} />
             )}
           </ActionBtn>
           <ActionBtn title="History" onClick={onHistory}>
-            <History className="h-3.5 w-3.5" />
+            <History size={13} />
           </ActionBtn>
           <ActionBtn title="Edit" onClick={onEdit}>
-            <Pencil className="h-3.5 w-3.5" />
+            <Pencil size={13} />
           </ActionBtn>
           <ActionBtn title="Delete" onClick={onDelete} danger>
-            <Trash2 className="h-3.5 w-3.5" />
+            <Trash2 size={13} />
           </ActionBtn>
         </div>
       </div>
@@ -445,12 +1240,40 @@ function ActionBtn({
       onClick={onClick}
       disabled={disabled}
       data-testid={testId}
-      className={[
-        'flex items-center justify-center w-7 h-7 rounded-lg transition-colors disabled:opacity-40',
-        danger
-          ? 'text-red-400/70 hover:bg-red-500/10'
-          : 'text-[var(--color-text-tertiary)] hover:bg-white/[0.08] hover:text-[var(--color-text-primary)]',
-      ].join(' ')}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 28,
+        height: 28,
+        borderRadius: 8,
+        border: '1px solid transparent',
+        background: 'transparent',
+        color: danger ? 'rgba(248,113,113,0.7)' : 'var(--color-text-tertiary)',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.4 : 1,
+        transition: 'all 140ms ease',
+      }}
+      onMouseEnter={(e) => {
+        if (!disabled) {
+          e.currentTarget.style.background = danger
+            ? 'rgba(239,68,68,0.10)'
+            : 'rgba(255,255,255,0.08)'
+          e.currentTarget.style.borderColor = danger
+            ? 'rgba(239,68,68,0.2)'
+            : 'var(--color-border-hairline)'
+          e.currentTarget.style.color = danger ? '#f87171' : 'var(--color-text-primary)'
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (!disabled) {
+          e.currentTarget.style.background = 'transparent'
+          e.currentTarget.style.borderColor = 'transparent'
+          e.currentTarget.style.color = danger
+            ? 'rgba(248,113,113,0.7)'
+            : 'var(--color-text-tertiary)'
+        }
+      }}
     >
       {children}
     </button>
@@ -481,7 +1304,6 @@ function MarketplacePanel({ onInstalled }: { onInstalled: () => void }): ReactEl
   }, [])
 
   const categories = ['all', ...Array.from(new Set(examples.map((e) => e.category))).sort()]
-
   const filtered = filter === 'all' ? examples : examples.filter((e) => e.category === filter)
 
   const handleInstall = async (ex: ExampleRoutine) => {
@@ -504,10 +1326,18 @@ function MarketplacePanel({ onInstalled }: { onInstalled: () => void }): ReactEl
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-32">
-        <div className="h-1 w-16 overflow-hidden rounded-full bg-white/10">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 128 }}>
+        <div
+          style={{
+            height: 4,
+            width: 64,
+            overflow: 'hidden',
+            borderRadius: 999,
+            background: 'rgba(255,255,255,0.08)',
+          }}
+        >
           <motion.div
-            className="h-full rounded-full bg-violet-500/60"
+            style={{ height: '100%', borderRadius: 999, background: 'rgba(139,92,246,0.6)' }}
             animate={{ x: ['-100%', '100%'] }}
             transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
           />
@@ -518,24 +1348,49 @@ function MarketplacePanel({ onInstalled }: { onInstalled: () => void }): ReactEl
 
   if (examples.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3 text-center">
-        <Store className="h-8 w-8 text-[var(--color-text-tertiary)]/60" />
-        <p className="text-sm text-[var(--color-text-tertiary)]">No example routines found</p>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: 256,
+          gap: 12,
+          textAlign: 'center',
+        }}
+      >
+        <Store size={32} style={{ color: 'rgba(255,255,255,0.2)' }} />
+        <p
+          style={{
+            fontSize: 13,
+            color: 'var(--color-text-tertiary)',
+            fontFamily: 'var(--font-sans)',
+          }}
+        >
+          No example routines found
+        </p>
       </div>
     )
   }
 
   return (
     <FadeRise>
-      <div className="space-y-5">
-        {/* Category filter */}
-        <div className="flex items-center gap-2 flex-wrap">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        {/* Category filter chips */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {categories.map((cat) => (
             <button
               key={cat}
               onClick={() => setFilter(cat)}
-              className="px-3 py-1 rounded-full text-xs font-medium transition-colors capitalize"
               style={{
+                padding: '4px 12px',
+                borderRadius: 999,
+                fontSize: 11,
+                fontWeight: 500,
+                textTransform: 'capitalize',
+                fontFamily: 'var(--font-sans)',
+                cursor: 'pointer',
+                transition: 'all 140ms ease',
                 background: filter === cat ? 'rgba(139,92,246,0.15)' : 'rgba(255,255,255,0.04)',
                 border: `1px solid ${filter === cat ? 'rgba(139,92,246,0.35)' : 'var(--color-border-hairline)'}`,
                 color: filter === cat ? 'var(--color-accent-mid)' : 'var(--color-text-tertiary)',
@@ -547,7 +1402,13 @@ function MarketplacePanel({ onInstalled }: { onInstalled: () => void }): ReactEl
         </div>
 
         {/* Cards grid */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+            gap: 12,
+          }}
+        >
           <AnimatePresence mode="popLayout">
             {filtered.map((ex) => {
               const colorClass = CATEGORY_COLORS[ex.category] ?? 'text-slate-400 bg-slate-500/10'
@@ -559,14 +1420,17 @@ function MarketplacePanel({ onInstalled }: { onInstalled: () => void }): ReactEl
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.96 }}
-                  className="group relative flex flex-col gap-3 transition-colors"
                   style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 12,
                     borderRadius: 14,
                     border: '1px solid var(--color-border-hairline)',
-                    background: 'rgba(20,20,28,0.80)',
-                    backdropFilter: 'blur(8px)',
-                    WebkitBackdropFilter: 'blur(8px)',
+                    background: 'rgba(18,18,26,0.72)',
+                    backdropFilter: 'blur(12px)',
+                    WebkitBackdropFilter: 'blur(12px)',
                     padding: '16px 18px',
+                    transition: 'border-color 140ms ease',
                   }}
                   onMouseEnter={(e: React.MouseEvent<HTMLDivElement>) => {
                     e.currentTarget.style.borderColor = 'var(--color-border-subtle)'
@@ -575,10 +1439,32 @@ function MarketplacePanel({ onInstalled }: { onInstalled: () => void }): ReactEl
                     e.currentTarget.style.borderColor = 'var(--color-border-hairline)'
                   }}
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-medium text-[var(--color-text-primary)]">
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      justifyContent: 'space-between',
+                      gap: 12,
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          flexWrap: 'wrap',
+                          marginBottom: 4,
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 600,
+                            color: 'var(--color-text-primary)',
+                            fontFamily: 'var(--font-sans)',
+                          }}
+                        >
                           {ex.name}
                         </span>
                         <span
@@ -587,35 +1473,63 @@ function MarketplacePanel({ onInstalled }: { onInstalled: () => void }): ReactEl
                           {ex.category}
                         </span>
                       </div>
-                      <p className="text-xs text-[var(--color-text-tertiary)] mt-1 leading-relaxed">
+                      <p
+                        style={{
+                          fontSize: 12,
+                          color: 'var(--color-text-tertiary)',
+                          fontFamily: 'var(--font-sans)',
+                          lineHeight: 1.5,
+                        }}
+                      >
                         {ex.description}
                       </p>
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between mt-auto">
-                    <span className="text-[11px] text-[var(--color-text-tertiary)]/60">
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      marginTop: 'auto',
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color: 'rgba(255,255,255,0.3)',
+                        fontFamily: 'var(--font-sans)',
+                      }}
+                    >
                       {ex.actions.length} {ex.actions.length === 1 ? 'action' : 'actions'}
                     </span>
                     <motion.button
                       whileTap={{ scale: 0.95 }}
                       onClick={() => void handleInstall(ex)}
                       disabled={isInstalled || isInstalling}
-                      className="flex items-center gap-1.5 text-xs font-medium transition-colors disabled:opacity-60"
                       style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
                         padding: '4px 12px',
                         borderRadius: 7,
+                        fontSize: 12,
+                        fontWeight: 600,
+                        fontFamily: 'var(--font-sans)',
+                        cursor: isInstalled ? 'default' : 'pointer',
+                        opacity: isInstalling ? 0.7 : 1,
+                        transition: 'all 140ms ease',
                         background: isInstalled ? 'rgba(16,185,129,0.12)' : 'rgba(139,92,246,0.15)',
                         border: `1px solid ${isInstalled ? 'rgba(16,185,129,0.25)' : 'rgba(139,92,246,0.20)'}`,
                         color: isInstalled ? '#34d399' : 'var(--color-accent-mid)',
                       }}
                     >
                       {isInstalling ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
+                        <Loader2 size={12} className="animate-spin" />
                       ) : isInstalled ? (
-                        <CheckCircle className="h-3 w-3" />
+                        <CheckCircle size={12} />
                       ) : (
-                        <Download className="h-3 w-3" />
+                        <Download size={12} />
                       )}
                       {isInstalled ? 'Installed' : 'Install'}
                     </motion.button>

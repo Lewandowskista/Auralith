@@ -116,3 +116,9 @@ export const NewsTriggerFetchResultSchema = z.object({ triggered: z.boolean() })
 
 export const NewsSeedTopicsParamsSchema = z.object({ topics: z.array(z.string().min(1)) })
 export const NewsSeedTopicsResultSchema = z.object({ seeded: z.number() })
+
+export const NewsFetchItemFullContentParamsSchema = z.object({ itemId: z.string() })
+export const NewsFetchItemFullContentResultSchema = z.object({
+  fetched: z.boolean(),
+  fullContent: z.string().nullable(),
+})

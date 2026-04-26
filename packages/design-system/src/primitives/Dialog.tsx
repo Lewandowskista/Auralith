@@ -36,38 +36,74 @@ export function Dialog({
     <AnimatePresence>
       {open ? (
         <>
+          {/* Backdrop */}
           <motion.div
-            className="fixed inset-0 z-50 bg-black/55 backdrop-blur-sm"
+            className="fixed inset-0 z-50"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            style={{
+              background: 'rgba(0,0,0,0.52)',
+              backdropFilter: 'blur(10px)',
+              WebkitBackdropFilter: 'blur(10px)',
+            }}
             onClick={onClose}
           />
+
+          {/* Panel */}
           <motion.div
             className="fixed inset-0 z-[60] flex items-center justify-center px-4"
-            initial={{ opacity: 0, y: 12, scale: 0.98 }}
+            initial={{ opacity: 0, y: 14, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 8, scale: 0.98 }}
-            transition={{ duration: 0.18, ease: [0.2, 0.8, 0.2, 1] }}
+            exit={{ opacity: 0, y: 8, scale: 0.97 }}
+            transition={{ duration: 0.2, ease: [0, 0, 0.2, 1] }}
           >
             <div
               role="dialog"
               aria-modal="true"
               aria-label={title}
-              className={cn(
-                'w-full max-w-[720px] rounded-[28px] border border-white/[0.08] bg-[rgba(16,16,22,0.96)] shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur-2xl',
-                className,
-              )}
-              style={contentStyle}
+              className={cn('w-full max-w-[720px] rounded-[24px] overflow-hidden', className)}
+              style={{
+                background: 'rgba(12,12,18,0.96)',
+                border: '1px solid rgba(255,255,255,0.09)',
+                boxShadow: '0 24px 80px rgba(0,0,0,0.55), 0 1px 0 rgba(255,255,255,0.06) inset',
+                backdropFilter: 'blur(32px)',
+                WebkitBackdropFilter: 'blur(32px)',
+                ...contentStyle,
+              }}
             >
               {(title || description) && (
-                <div className="relative border-b border-white/[0.06] px-6 py-5 pr-14">
-                  {title && <h2 className="text-xl font-semibold text-[#F4F4F8]">{title}</h2>}
-                  {description && <p className="mt-1 text-sm text-[#6F6F80]">{description}</p>}
+                <div
+                  className="relative px-6 py-5 pr-14"
+                  style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}
+                >
+                  {title && (
+                    <h2
+                      className="text-[17px] font-semibold tracking-tight"
+                      style={{ color: '#F4F4F8' }}
+                    >
+                      {title}
+                    </h2>
+                  )}
+                  {description && (
+                    <p className="mt-1 text-sm" style={{ color: '#6F6F80' }}>
+                      {description}
+                    </p>
+                  )}
                   <button
                     onClick={onClose}
                     aria-label="Close dialog"
-                    className="absolute right-4 top-4 flex h-7 w-7 items-center justify-center rounded-lg text-[#6F6F80] transition hover:bg-white/[0.06] hover:text-[#F4F4F8]"
+                    className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-xl transition"
+                    style={{ color: '#6F6F80' }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(255,255,255,0.07)'
+                      e.currentTarget.style.color = '#F4F4F8'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'transparent'
+                      e.currentTarget.style.color = '#6F6F80'
+                    }}
                   >
                     <X size={15} />
                   </button>

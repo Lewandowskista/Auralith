@@ -225,8 +225,16 @@ describe('ModelRouter — legacy model migration', () => {
 
 describe('ModelRouter — preset completeness', () => {
   const ALL_ROLES = [
-    'classifier', 'chat', 'summarize', 'extract', 'agent', 'embed',
-    'rag', 'news_synthesis', 'tool_call', 'coding',
+    'classifier',
+    'chat',
+    'summarize',
+    'extract',
+    'agent',
+    'embed',
+    'rag',
+    'news_synthesis',
+    'tool_call',
+    'coding',
   ] as const
 
   for (const presetName of ['fast', 'balanced', 'quality'] as ModelPresetName[]) {

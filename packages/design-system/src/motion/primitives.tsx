@@ -108,6 +108,68 @@ export function SlideInRight({
   )
 }
 
+type SlideUpProps = HTMLMotionProps<'div'> & {
+  children: ReactNode
+  delay?: number
+  duration?: number
+  distance?: number
+}
+
+// Slide up from below — modals, bottom sheets, cards entering from bottom
+export function SlideUp({
+  children,
+  delay = 0,
+  duration = motionDuration.emphasized,
+  distance = 16,
+  ...props
+}: SlideUpProps) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: distance }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: distance / 2 }}
+      transition={{
+        duration: duration / 1000,
+        delay: delay / 1000,
+        ease: motionEasing.decelerate,
+      }}
+      {...props}
+    >
+      {children}
+    </motion.div>
+  )
+}
+
+type ScaleInProps = HTMLMotionProps<'div'> & {
+  children: ReactNode
+  delay?: number
+  duration?: number
+}
+
+// Scale in from 0.92 — dialogs, popovers, context menus
+export function ScaleIn({
+  children,
+  delay = 0,
+  duration = motionDuration.standard,
+  ...props
+}: ScaleInProps) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.94 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.94 }}
+      transition={{
+        duration: duration / 1000,
+        delay: delay / 1000,
+        ease: motionEasing.decelerate,
+      }}
+      {...props}
+    >
+      {children}
+    </motion.div>
+  )
+}
+
 // AnimatePresence re-export for convenience
 export { AnimatePresence }
 
@@ -119,7 +181,7 @@ export const shimmerVariants: Variants = {
     transition: {
       repeat: Infinity,
       repeatType: 'loop',
-      duration: 1.4,
+      duration: 1.6,
       ease: 'linear',
     },
   },
@@ -127,9 +189,12 @@ export const shimmerVariants: Variants = {
 
 export function ShimmerLine({ className = '' }: { className?: string }) {
   return (
-    <div className={`relative overflow-hidden rounded bg-white/5 ${className}`} aria-hidden="true">
+    <div
+      className={`relative overflow-hidden rounded-lg bg-white/[0.04] ${className}`}
+      aria-hidden="true"
+    >
       <motion.div
-        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/8 to-transparent"
+        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.07] to-transparent"
         variants={shimmerVariants}
         initial="initial"
         animate="animate"
@@ -150,6 +215,12 @@ export const staggerItemVariants: Variants = {
   visible: { opacity: 1, y: 0, transition: { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] } },
 }
 
+// Stagger item subtle — fades in without y movement (for denser lists)
+export const staggerItemFadeVariants: Variants = {
+  hidden: { opacity: 0 },
+  visible: { opacity: 1, transition: { duration: 0.16, ease: [0.2, 0.8, 0.2, 1] } },
+}
+
 type TabContentProps = {
   children: ReactNode
   tabKey: string
@@ -164,10 +235,10 @@ export function TabContent({ children, tabKey, direction }: TabContentProps): Re
         key={tabKey}
         custom={direction}
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        initial={((d: number) => ({ opacity: 0, x: d * 20 })) as any}
+        initial={((d: number) => ({ opacity: 0, x: d * 18 })) as any}
         animate={{ opacity: 1, x: 0 }}
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        exit={((d: number) => ({ opacity: 0, x: d * -20 })) as any}
+        exit={((d: number) => ({ opacity: 0, x: d * -18 })) as any}
         transition={{ duration: 0.18, ease: [0.2, 0.8, 0.2, 1] }}
         style={{ width: '100%', height: '100%' }}
       >

@@ -519,13 +519,18 @@ export function VoiceSection(): ReactElement {
         {/* Test + speed */}
         <div className="flex items-center gap-3 mb-4">
           <button
-            onClick={() =>
+            onClick={() => {
+              const isGBVoice =
+                availableVoices.find((v) => v.id === selectedVoice)?.lang === 'en_GB' ||
+                voices.find((v) => v.id === selectedVoice)?.lang?.startsWith('en_GB')
               void window.auralith.invoke('voice.speak', {
-                text: 'Auralith is ready. How can I help?',
+                text: isGBVoice
+                  ? 'Good evening. All systems are online and ready, sir.'
+                  : 'Auralith is ready. How can I help?',
                 voiceId: selectedVoice || undefined,
                 lengthScale: ttsLengthScale,
               })
-            }
+            }}
             className="flex items-center gap-1.5 rounded-lg border border-[var(--color-border-hairline)] px-3 py-1.5 text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-white/[0.04]"
           >
             <Volume2 size={12} />
@@ -570,6 +575,14 @@ export function VoiceSection(): ReactElement {
             <div className="space-y-1.5">
               {availableVoices
                 .filter((v) => !installedVoiceIds.has(v.id))
+                .sort((a, b) => {
+                  // British voices first, then high quality, then alphabetical
+                  const aGB = a.lang === 'en_GB' ? 0 : 1
+                  const bGB = b.lang === 'en_GB' ? 0 : 1
+                  if (aGB !== bGB) return aGB - bGB
+                  const qualityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 }
+                  return (qualityOrder[a.quality] ?? 3) - (qualityOrder[b.quality] ?? 3)
+                })
                 .map((v) => {
                   const prog = downloadProgress[v.id]
                   const isDownloading = downloading.has(v.id)

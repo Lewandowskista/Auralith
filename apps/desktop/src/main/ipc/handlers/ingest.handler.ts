@@ -38,6 +38,12 @@ export function registerIngestHandlers(): void {
       })
       .parse(params)
 
+    // Validate path is one of the known browser history locations — not an arbitrary file
+    const knownPaths = findBrowserHistoryPaths().map((p) => p.path)
+    if (!knownPaths.includes(path)) {
+      throw new Error('Path is not a recognized browser history location')
+    }
+
     const { sqlite } = getDeps()
 
     let rows

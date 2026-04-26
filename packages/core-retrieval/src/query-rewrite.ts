@@ -28,7 +28,8 @@ const QUERY_REWRITE_CONTRACT: PromptContract<RewriteOutput> = {
 1. Two short paraphrases that capture the same intent with different wording
 2. One keyword-only variant (3-5 key terms, no stop words)
 Output ONLY valid JSON.`,
-  userTemplate: (ctx) => `Query: "${ctx['query'] ?? ''}"\n\nOutput JSON: {"paraphrases": ["...", "..."], "keywords": "..."}`,
+  userTemplate: (ctx) =>
+    `Query: "${ctx['query'] ?? ''}"\n\nOutput JSON: {"paraphrases": ["...", "..."], "keywords": "..."}`,
   outputSchema: RewriteOutputSchema,
   maxTokens: 100,
   temperature: 0,

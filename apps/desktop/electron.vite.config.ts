@@ -50,6 +50,7 @@ export default defineConfig({
           'pdf-parse',
           'electron',
           'canvas',
+          'ws',
         ],
       },
     },

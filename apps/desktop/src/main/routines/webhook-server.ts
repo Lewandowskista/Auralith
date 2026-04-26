@@ -54,12 +54,21 @@ export class WebhookServer {
 
   private tryListen(port: number): Promise<void> {
     return new Promise((resolve, reject) => {
+      const MAX_BODY = 1_000_000 // 1 MB
       const srv = createServer((req, res) => {
         let body = ''
+        let tooLarge = false
         req.on('data', (chunk: Buffer) => {
           body += chunk.toString()
+          if (body.length > MAX_BODY) {
+            tooLarge = true
+            res.writeHead(413, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ error: 'Payload too large' }))
+            req.destroy()
+          }
         })
         req.on('end', () => {
+          if (tooLarge) return
           const url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`)
           const path = url.pathname
           const secret = req.headers['x-auralith-secret'] as string | undefined

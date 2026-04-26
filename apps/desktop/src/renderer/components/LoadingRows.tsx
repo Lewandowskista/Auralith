@@ -11,8 +11,8 @@ export function LoadingRows({ count = 4, height = 'h-10' }: Props): ReactElement
       {Array.from({ length: count }).map((_, i) => (
         <div
           key={i}
-          className={`${height} animate-pulse rounded-xl bg-white/[0.05]`}
-          style={{ opacity: 1 - i * 0.15 }}
+          className={`${height} skeleton rounded-xl`}
+          style={{ opacity: 1 - i * 0.18 }}
         />
       ))}
     </div>

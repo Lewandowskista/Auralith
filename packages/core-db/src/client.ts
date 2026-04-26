@@ -96,6 +96,7 @@ function runMigrations(sqlite: Database.Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON chunks(doc_id);
+    CREATE INDEX IF NOT EXISTS idx_folder_rules_space_id ON folder_rules(space_id);
 
     CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
       text,
@@ -174,6 +175,9 @@ function runMigrations(sqlite: Database.Database): void {
     );
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_news_items_guid ON news_items(feed_id, guid);
+    CREATE INDEX IF NOT EXISTS idx_news_clusters_topic_id ON news_clusters(topic_id);
+    CREATE INDEX IF NOT EXISTS idx_news_items_feed_id ON news_items(feed_id);
+    CREATE INDEX IF NOT EXISTS idx_news_items_cluster_id ON news_items(cluster_id);
 
     CREATE TABLE IF NOT EXISTS weather_cache (
       location_key TEXT PRIMARY KEY,
@@ -526,6 +530,12 @@ function runMigrations(sqlite: Database.Database): void {
       hits_json TEXT NOT NULL DEFAULT '[]'
     );
     CREATE INDEX IF NOT EXISTS idx_retrieval_traces_ts ON retrieval_traces(ts DESC);
+
+    -- M15: pc-control always-allow list
+    CREATE TABLE IF NOT EXISTS pccontrol_allowlist (
+      tool_id TEXT PRIMARY KEY,
+      added_at INTEGER NOT NULL
+    );
   `)
 }
 

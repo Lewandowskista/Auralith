@@ -135,12 +135,24 @@ export function createSuggestionsRepo(db: DbClient) {
     const expireResult = db
       .update(suggestions)
       .set({ status: 'expired', decidedAt: now })
-      .where(and(eq(suggestions.status, 'open'), isNotNull(suggestions.expiresAt), lt(suggestions.expiresAt, now)))
+      .where(
+        and(
+          eq(suggestions.status, 'open'),
+          isNotNull(suggestions.expiresAt),
+          lt(suggestions.expiresAt, now),
+        ),
+      )
       .run()
     // Single bulk UPDATE to wake snoozed suggestions whose snooze has expired
     db.update(suggestions)
       .set({ status: 'open', decidedAt: null, expiresAt: null })
-      .where(and(eq(suggestions.status, 'snoozed'), isNotNull(suggestions.expiresAt), lt(suggestions.expiresAt, now)))
+      .where(
+        and(
+          eq(suggestions.status, 'snoozed'),
+          isNotNull(suggestions.expiresAt),
+          lt(suggestions.expiresAt, now),
+        ),
+      )
       .run()
     return expireResult.changes
   }

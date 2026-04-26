@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3'
+import type Database from 'better-sqlite3'
 import { randomUUID } from 'crypto'
 
 export type TraceRow = {
@@ -129,7 +129,7 @@ export function createObservabilityRepo(sqlite: Database.Database): Observabilit
       const rows = sqlite
         .prepare(
           `SELECT trace_id, op, duration_ms, status, err_code, ts, params_bytes, result_bytes
-           FROM traces ${where} ORDER BY ts DESC LIMIT ${limit}`
+           FROM traces ${where} ORDER BY ts DESC LIMIT ${limit}`,
         )
         .all(params) as Array<Record<string, unknown>>
       return rows.map((r) => ({
@@ -146,9 +146,7 @@ export function createObservabilityRepo(sqlite: Database.Database): Observabilit
 
     getTraceStats(fromTs, toTs) {
       const rows = sqlite
-        .prepare(
-          `SELECT op, duration_ms, status FROM traces WHERE ts >= ? AND ts <= ? ORDER BY op`
-        )
+        .prepare(`SELECT op, duration_ms, status FROM traces WHERE ts >= ? AND ts <= ? ORDER BY op`)
         .all(fromTs, toTs) as Array<{ op: string; duration_ms: number; status: string }>
 
       const byOp = new Map<string, number[]>()
@@ -197,7 +195,7 @@ export function createObservabilityRepo(sqlite: Database.Database): Observabilit
              parse_failures = parse_failures + excluded.parse_failures,
              validation_failures = validation_failures + excluded.validation_failures,
              repaired = repaired + excluded.repaired,
-             successes = successes + excluded.successes`
+             successes = successes + excluded.successes`,
         )
         .run({ ...row, id })
     },
@@ -208,14 +206,14 @@ export function createObservabilityRepo(sqlite: Database.Database): Observabilit
             .prepare(
               `SELECT model, role, prompt_id, hour_bucket,
                       attempts, parse_failures, validation_failures, repaired, successes
-               FROM model_reliability WHERE hour_bucket >= ? ORDER BY hour_bucket DESC`
+               FROM model_reliability WHERE hour_bucket >= ? ORDER BY hour_bucket DESC`,
             )
             .all(fromHourBucket) as Array<Record<string, unknown>>)
         : (sqlite
             .prepare(
               `SELECT model, role, prompt_id, hour_bucket,
                       attempts, parse_failures, validation_failures, repaired, successes
-               FROM model_reliability ORDER BY hour_bucket DESC`
+               FROM model_reliability ORDER BY hour_bucket DESC`,
             )
             .all() as Array<Record<string, unknown>>)
       return rows.map((r) => ({
@@ -240,7 +238,7 @@ export function createObservabilityRepo(sqlite: Database.Database): Observabilit
         .prepare(
           `INSERT OR IGNORE INTO retrieval_traces
              (id, ts, query, hit_count, top_score, latency_ms, hits_json)
-           VALUES (@id, @ts, @query, @hitCount, @topScore, @latencyMs, @hitsJson)`
+           VALUES (@id, @ts, @query, @hitCount, @topScore, @latencyMs, @hitsJson)`,
         )
         .run({ ...row, id: randomUUID() })
     },
@@ -250,13 +248,13 @@ export function createObservabilityRepo(sqlite: Database.Database): Observabilit
         ? (sqlite
             .prepare(
               `SELECT id, ts, query, hit_count, top_score, latency_ms, hits_json
-               FROM retrieval_traces WHERE ts >= ? ORDER BY ts DESC LIMIT ?`
+               FROM retrieval_traces WHERE ts >= ? ORDER BY ts DESC LIMIT ?`,
             )
             .all(fromTs, limit) as Array<Record<string, unknown>>)
         : (sqlite
             .prepare(
               `SELECT id, ts, query, hit_count, top_score, latency_ms, hits_json
-               FROM retrieval_traces ORDER BY ts DESC LIMIT ?`
+               FROM retrieval_traces ORDER BY ts DESC LIMIT ?`,
             )
             .all(limit) as Array<Record<string, unknown>>)
       return rows.map((r) => ({

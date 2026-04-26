@@ -42,6 +42,9 @@ export type SearchHit = {
   docPath: string
   docTitle: string
   docSummary: string | null
+  docKind: string
+  docSize: number
+  docMtime: number
   headingPath: string
   charStart: number
   charEnd: number
@@ -86,11 +89,7 @@ export async function hybridSearch(
 
     // Embed original + any additional queries in one batch if possible
     mode === 'hybrid' || mode === 'vector'
-      ? embedQueries(
-          [opts.query, ...(opts.additionalQueries ?? [])],
-          embedClient,
-          embedModel,
-        )
+      ? embedQueries([opts.query, ...(opts.additionalQueries ?? [])], embedClient, embedModel)
       : Promise.resolve([] as number[][]),
   ])
 
@@ -145,7 +144,10 @@ export async function hybridSearch(
 
   // 7. MMR diversification using chunk embeddings
   if (useMmr && hits.length > k) {
-    const embMap = buildEmbeddingMap(hits.map((h) => h.chunkId), vecRepo)
+    const embMap = buildEmbeddingMap(
+      hits.map((h) => h.chunkId),
+      vecRepo,
+    )
     hits = mmrSelectById(hits, embMap, k, mmrLambda)
   } else {
     hits = hits.slice(0, k)
@@ -273,6 +275,9 @@ function fetchHits(chunkIds: string[], db: DbClient, spaceId?: string): SearchHi
       docPath: doc.path,
       docTitle: doc.title,
       docSummary: doc.summary ?? null,
+      docKind: doc.kind,
+      docSize: doc.size,
+      docMtime: doc.mtime instanceof Date ? doc.mtime.getTime() : Number(doc.mtime),
       headingPath: chunk.headingPath,
       charStart: chunk.charStart,
       charEnd: chunk.charEnd,
@@ -289,9 +294,9 @@ function attachNeighbors(hits: SearchHit[], sqlite: Database.Database, n: number
   // First, resolve seq numbers for all hit chunks in one pass
   const seqMap = new Map<string, number>()
   for (const hit of hits) {
-    const row = sqlite
-      .prepare(`SELECT seq FROM chunks WHERE id = ?`)
-      .get(hit.chunkId) as { seq: number } | undefined
+    const row = sqlite.prepare(`SELECT seq FROM chunks WHERE id = ?`).get(hit.chunkId) as
+      | { seq: number }
+      | undefined
     if (row) seqMap.set(hit.chunkId, row.seq)
   }
 
@@ -310,13 +315,12 @@ function attachNeighbors(hits: SearchHit[], sqlite: Database.Database, n: number
            ORDER BY seq ASC
            LIMIT ?`,
         )
-        .all(
-          hit.docId,
-          Math.max(0, seq - n),
-          seq + n,
-          hit.chunkId,
-          n * 2 + 2,
-        ) as Array<{ id: string; seq: number; text: string; heading_path: string }>
+        .all(hit.docId, Math.max(0, seq - n), seq + n, hit.chunkId, n * 2 + 2) as Array<{
+        id: string
+        seq: number
+        text: string
+        heading_path: string
+      }>
 
       const neighbors: NeighborChunk[] = rows
         .filter((r) => {
@@ -336,14 +340,12 @@ function attachNeighbors(hits: SearchHit[], sqlite: Database.Database, n: number
 function buildEmbeddingMap(chunkIds: string[], vecRepo: ChunkVecRepo): Map<string, number[]> {
   const map = new Map<string, number[]>()
   try {
-    // ChunkVecRepo doesn't expose a batch-get by ID, so we use a trivial
-    // cosine search with each chunk's own stored vec — instead we skip
-    // full retrieval and return empty map to gracefully fall back to top-k.
-    // Real ONNX path would batch-fetch stored vectors from chunk_vec.
-    void chunkIds
-    void vecRepo
+    const rows = vecRepo.getByIds(chunkIds)
+    for (const row of rows) {
+      map.set(row.chunkId, row.embedding)
+    }
   } catch {
-    // No-op
+    // Non-fatal: MMR falls back to top-k when map is empty
   }
   return map
 }

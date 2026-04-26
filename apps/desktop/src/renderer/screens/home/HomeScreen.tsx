@@ -1,41 +1,29 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import type { ReactElement } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
-  FadeRise,
-  WidgetGrid,
-  WidgetCard,
-  Dialog,
-  BarChart,
-  staggerListVariants,
-  staggerItemVariants,
-  type BarChartDatum,
-} from '@auralith/design-system'
-import {
-  Bell,
-  BookOpen,
-  Camera,
-  CheckCircle,
-  CheckSquare,
-  ChevronDown,
-  ChevronUp,
-  Clipboard,
-  CloudSun,
-  Coffee,
-  MessageSquare,
-  Monitor,
+  Activity,
+  Newspaper,
+  Plus,
+  Play,
   RefreshCw,
   Sparkles,
-  WandSparkles,
+  Mic,
+  ExternalLink,
+  Coffee,
+  CheckCircle,
   X,
-  Zap,
+  Clock,
+  MessageSquare,
+  ChevronRight,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { EventPrepCard } from '../../components/EventPrepCard'
 import type { EventPrepPayload } from '../../components/EventPrepCard'
-import { loadPromptPresets, type PromptPreset } from '../../lib/prompt-presets'
 import { navigateTo } from '../../lib/navigate'
 import { renderMarkdown } from '../../lib/markdown'
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 type Suggestion = {
   id: string
@@ -51,12 +39,24 @@ type Suggestion = {
 
 type BriefingPayload = {
   tone?: 'default' | 'leisure'
-  weather?: {
-    summary: string
-    alertLevel: string
-  }
+  weather?: { summary: string; alertLevel: string }
   newsClusters: Array<{ topicName: string; summary: string; itemCount: number }>
   generatedAt: number
+}
+
+type Thread = {
+  id: string
+  title?: string
+  lastMessageAt?: number
+  messageCount?: number
+}
+
+type NewsItem = {
+  id: string
+  headline: string
+  sourceName?: string
+  topicName?: string
+  fetchedAt: number
 }
 
 type ActivityRow = {
@@ -66,165 +66,266 @@ type ActivityRow = {
   path: string
 }
 
-type ClipboardRow = {
-  id: string
-  ts: number
-  textValue?: string
-  charCount?: number
-  redacted: boolean
-}
-
-type AppUsageRow = {
-  id: string
-  bucket: 'ide' | 'browser' | 'explorer' | 'media' | 'productivity' | 'other'
-  processName: string
-  durationMs?: number
-}
-
-type WidgetId =
-  | 'briefing'
-  | 'suggestions'
-  | 'quick-actions'
-  | 'recent-activity'
-  | 'clipboard'
-  | 'app-usage'
-  | 'prompt-library'
-  | 'custom-note'
-
-const DEFAULT_WIDGETS: WidgetId[] = [
-  'briefing',
-  'suggestions',
-  'quick-actions',
-  'recent-activity',
-  'clipboard',
-  'app-usage',
-  'prompt-library',
-  'custom-note',
-]
-
 const LEISURE_KINDS = new Set([
   'leisure.weekend-brief',
   'leisure.reading-resurfaced',
   'leisure.hobby-idea',
 ])
 
-function isWeekend(): boolean {
-  const d = new Date().getDay()
-  return d === 0 || d === 6
-}
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function greeting(): string {
   const h = new Date().getHours()
-  if (isWeekend()) {
-    if (h < 12) return 'Good morning.'
-    if (h < 17) return 'Enjoy your afternoon.'
-    return 'Good evening.'
+  const d = new Date().getDay()
+  const weekend = d === 0 || d === 6
+  if (weekend) {
+    if (h < 12) return 'Good morning'
+    if (h < 17) return 'Enjoy your afternoon'
+    return 'Good evening'
   }
-  if (h < 12) return 'Good morning.'
-  if (h < 17) return 'Good afternoon.'
-  return 'Good evening.'
+  if (h < 12) return 'Good morning'
+  if (h < 17) return 'Good afternoon'
+  return 'Good evening'
 }
 
-function formatTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
-function describeSuggestedAction(json: string): string | null {
-  try {
-    const parsed = JSON.parse(json) as { toolId?: string; params?: Record<string, unknown> }
-    if (!parsed.toolId) return null
-    const label = parsed.toolId.replace(/\./g, ' › ')
-    const paramStr =
-      parsed.params && Object.keys(parsed.params).length > 0
-        ? Object.entries(parsed.params)
-            .map(([k, v]) => `${k}: ${String(v)}`)
-            .join(', ')
-        : null
-    return paramStr ? `${label} (${paramStr})` : label
-  } catch {
-    return null
-  }
-}
-
-function formatDuration(ms?: number): string {
-  if (!ms) return '0m'
-  const minutes = Math.max(1, Math.round(ms / 60000))
-  if (minutes < 60) return `${minutes}m`
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+function fmtAgo(ts: number): string {
+  const diff = Date.now() - ts
+  const m = Math.floor(diff / 60_000)
+  const h = Math.floor(diff / 3_600_000)
+  if (m < 1) return 'just now'
+  if (m < 60) return `${m}m ago`
+  if (h < 24) return `${h}h ago`
+  return `${Math.floor(h / 24)}d ago`
 }
 
 function basename(p: string): string {
   return p.replace(/\\/g, '/').split('/').pop() ?? p
 }
 
-function readWidgetOrder(value: unknown): WidgetId[] {
-  if (!Array.isArray(value)) return DEFAULT_WIDGETS
-  const ids = value.filter(
-    (entry): entry is WidgetId =>
-      typeof entry === 'string' && DEFAULT_WIDGETS.includes(entry as WidgetId),
-  )
-  return ids.length > 0 ? ids : DEFAULT_WIDGETS
+function tierColor(tier: string): { bg: string; dot: string; label: string } {
+  if (tier === 'confirm') return { bg: 'rgba(251,191,36,0.12)', dot: '#fbbf24', label: 'confirm' }
+  if (tier === 'restricted')
+    return { bg: 'rgba(248,113,113,0.12)', dot: '#f87171', label: 'restricted' }
+  return { bg: 'rgba(52,211,153,0.10)', dot: '#34d399', label: 'safe' }
 }
 
-// ─── Row style helpers ────────────────────────────────────────────────────────
+// ─── Sub-components ───────────────────────────────────────────────────────────
 
-const ROW_CLS =
-  'flex w-full items-center justify-between rounded-xl border border-[var(--color-border-hairline)] bg-[var(--color-bg-2)]/40 px-4 py-3 text-left transition hover:bg-[var(--color-bg-2)]/60'
+function SectionHead({
+  eyebrow,
+  title,
+  right,
+}: {
+  eyebrow: string
+  title: string
+  right?: ReactElement
+}): ReactElement {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'space-between',
+        marginBottom: 14,
+      }}
+    >
+      <div>
+        <div
+          style={{
+            fontSize: 10,
+            fontWeight: 600,
+            letterSpacing: '0.14em',
+            textTransform: 'uppercase',
+            color: 'var(--color-text-tertiary)',
+            marginBottom: 4,
+          }}
+        >
+          {eyebrow}
+        </div>
+        <div
+          style={{
+            fontSize: 16,
+            fontWeight: 600,
+            color: 'var(--color-text-primary)',
+            letterSpacing: '-0.01em',
+          }}
+        >
+          {title}
+        </div>
+      </div>
+      {right}
+    </div>
+  )
+}
 
-const ROW_BTN_CLS =
-  'flex w-full items-start gap-3 rounded-xl border border-[var(--color-border-hairline)] bg-[var(--color-bg-2)]/40 px-4 py-3 text-left transition hover:bg-[var(--color-bg-2)]/60'
+function GhostBtn({
+  icon,
+  children,
+  onClick,
+}: {
+  icon?: ReactElement
+  children?: ReactElement | string
+  onClick?: () => void
+}): ReactElement {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '6px 12px',
+        borderRadius: 8,
+        border: '1px solid rgba(255,255,255,0.08)',
+        background: 'rgba(255,255,255,0)',
+        color: 'var(--color-text-secondary)',
+        fontSize: 12,
+        fontWeight: 500,
+        cursor: 'pointer',
+        transition: 'background 120ms, color 120ms, border-color 120ms',
+        fontFamily: 'var(--font-sans)',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = 'rgba(255,255,255,0.06)'
+        e.currentTarget.style.color = 'var(--color-text-primary)'
+        e.currentTarget.style.borderColor = 'rgba(255,255,255,0.14)'
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = 'rgba(255,255,255,0)'
+        e.currentTarget.style.color = 'var(--color-text-secondary)'
+        e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'
+      }}
+    >
+      {icon}
+      {children}
+    </button>
+  )
+}
+
+function PrimaryBtn({
+  icon,
+  children,
+  onClick,
+  disabled,
+}: {
+  icon?: ReactElement
+  children?: ReactElement | string
+  onClick?: () => void
+  disabled?: boolean
+}): ReactElement {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '6px 14px',
+        borderRadius: 8,
+        border: 'none',
+        background: disabled ? 'rgba(139,92,246,0.4)' : 'var(--color-accent-low)',
+        color: 'white',
+        fontSize: 12,
+        fontWeight: 500,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        transition: 'opacity 120ms',
+        fontFamily: 'var(--font-sans)',
+        opacity: disabled ? 0.6 : 1,
+      }}
+      onMouseEnter={(e) => {
+        if (!disabled) e.currentTarget.style.opacity = '0.88'
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.opacity = '1'
+      }}
+    >
+      {icon}
+      {children}
+    </button>
+  )
+}
+
+function Card({
+  children,
+  onClick,
+  style,
+  className,
+}: {
+  children: ReactElement | ReactElement[] | string
+  onClick?: () => void
+  style?: React.CSSProperties
+  className?: string
+}): ReactElement {
+  const isBtn = !!onClick
+  const base: React.CSSProperties = {
+    borderRadius: 14,
+    border: '1px solid rgba(255,255,255,0.07)',
+    background: 'rgba(20,20,30,0.46)',
+    backdropFilter: 'blur(12px)',
+    WebkitBackdropFilter: 'blur(12px)',
+    padding: 20,
+    position: 'relative',
+    overflow: 'hidden',
+    transition: isBtn ? 'border-color 150ms, background 150ms' : undefined,
+    cursor: isBtn ? 'pointer' : undefined,
+    textAlign: isBtn ? 'left' : undefined,
+    width: isBtn ? '100%' : undefined,
+    ...style,
+  }
+  if (isBtn) {
+    return (
+      <button
+        className={className}
+        onClick={onClick}
+        style={base}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.borderColor = 'rgba(255,255,255,0.14)'
+          e.currentTarget.style.background = 'rgba(20,20,30,0.64)'
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.borderColor = 'rgba(255,255,255,0.07)'
+          e.currentTarget.style.background = 'rgba(20,20,30,0.46)'
+        }}
+      >
+        {children as ReactElement | ReactElement[]}
+      </button>
+    )
+  }
+  return (
+    <div className={className} style={base}>
+      {children}
+    </div>
+  )
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 export function HomeScreen(): ReactElement {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [briefing, setBriefing] = useState<BriefingPayload | null>(null)
-  const [briefingOpen, setBriefingOpen] = useState(true)
   const [briefingLoading, setBriefingLoading] = useState(false)
-  const [eventPrep, setEventPrep] = useState<EventPrepPayload | null>(null)
   const [actingOn, setActingOn] = useState<string | null>(null)
+  const [eventPrep, setEventPrep] = useState<EventPrepPayload | null>(null)
   const [recentActivity, setRecentActivity] = useState<ActivityRow[]>([])
-  const [clipboardItems, setClipboardItems] = useState<ClipboardRow[]>([])
-  const [appUsageRows, setAppUsageRows] = useState<AppUsageRow[]>([])
-  const [promptPresets, setPromptPresets] = useState<PromptPreset[]>([])
-  const [widgetOrder, setWidgetOrder] = useState<WidgetId[]>(DEFAULT_WIDGETS)
-  const [customNote, setCustomNote] = useState('')
-  const [customizeOpen, setCustomizeOpen] = useState(false)
-  const [draftNote, setDraftNote] = useState(customNote)
-
-  // Setup checklist state
-  const [watchedFolders, setWatchedFolders] = useState<string[]>([])
-  const [clipboardEnabled, setClipboardEnabled] = useState(false)
-  const [appUsageEnabled, setAppUsageEnabled] = useState(false)
-  const [checklistDismissed, setChecklistDismissed] = useState(false)
+  const [threads, setThreads] = useState<Thread[]>([])
+  const [topNews, setTopNews] = useState<NewsItem | null>(null)
   const [initialLoading, setInitialLoading] = useState(true)
+  const [currentWeather, setCurrentWeather] = useState<{
+    temp: number
+    description: string
+  } | null>(null)
 
   const loadDashboard = useCallback(async () => {
-    const [
-      suggestRes,
-      activityRes,
-      clipboardRes,
-      appUsageRes,
-      presets,
-      widgetsRes,
-      noteRes,
-      briefingRes,
-      foldersRes,
-      clipSettingsRes,
-      appSettingsRes,
-      checklistDismissRes,
-    ] = await Promise.all([
-      window.auralith.invoke('suggest.list', { status: 'open', limit: 5 }),
-      window.auralith.invoke('activity.query', { limit: 5, offset: 0 }),
-      window.auralith.invoke('clipboard.list', { limit: 3, offset: 0 }),
-      window.auralith.invoke('appUsage.listSessions', { limit: 12, offset: 0 }),
-      loadPromptPresets(),
-      window.auralith.invoke('settings.get', { key: 'home.widgets' }),
-      window.auralith.invoke('settings.get', { key: 'home.customNote' }),
-      window.auralith.invoke('briefing.getLastBriefing', {}),
-      window.auralith.invoke('settings.get', { key: 'activity.watchedFolders' }),
-      window.auralith.invoke('clipboard.getSettings', {}),
-      window.auralith.invoke('appUsage.getSettings', {}),
-      window.auralith.invoke('settings.get', { key: 'home.setupChecklistDismissed' }),
-    ])
+    const [suggestRes, activityRes, threadRes, newsRes, briefingRes, weatherRes] =
+      await Promise.all([
+        window.auralith.invoke('suggest.list', { status: 'open', limit: 4 }),
+        window.auralith.invoke('activity.query', { limit: 5, offset: 0 }),
+        window.auralith.invoke('assistant.listSessions', { limit: 4, offset: 0 }),
+        window.auralith.invoke('news.listItems', { limit: 1, offset: 0 }),
+        window.auralith.invoke('briefing.getLastBriefing', {}),
+        window.auralith.invoke('weather.getCurrent', {}),
+      ])
 
     if (suggestRes.ok) {
       setSuggestions((suggestRes.data as { suggestions: Suggestion[] }).suggestions)
@@ -232,40 +333,20 @@ export function HomeScreen(): ReactElement {
     if (activityRes.ok) {
       setRecentActivity((activityRes.data as { events: ActivityRow[] }).events)
     }
-    if (clipboardRes.ok) {
-      setClipboardItems((clipboardRes.data as { items: ClipboardRow[] }).items)
+    if (threadRes.ok) {
+      setThreads((threadRes.data as { sessions: Thread[] }).sessions)
     }
-    if (appUsageRes.ok) {
-      setAppUsageRows((appUsageRes.data as { sessions: AppUsageRow[] }).sessions)
-    }
-    setPromptPresets(presets)
-    if (widgetsRes.ok) {
-      setWidgetOrder(readWidgetOrder((widgetsRes.data as { value: unknown }).value))
-    }
-    if (noteRes.ok) {
-      const value = (noteRes.data as { value: unknown }).value
-      if (typeof value === 'string' && value.trim()) {
-        setCustomNote(value)
-        setDraftNote(value)
-      }
+    if (newsRes.ok) {
+      const items = (newsRes.data as { items: NewsItem[] }).items
+      if (items.length > 0) setTopNews(items[0] ?? null)
     }
     if (briefingRes.ok) {
       const { payload } = briefingRes.data as { payload: BriefingPayload | null }
       if (payload) setBriefing(payload)
     }
-    if (foldersRes.ok) {
-      const v = (foldersRes.data as { value: unknown }).value
-      setWatchedFolders(Array.isArray(v) ? (v as string[]) : [])
-    }
-    if (clipSettingsRes.ok) {
-      setClipboardEnabled((clipSettingsRes.data as { enabled: boolean }).enabled)
-    }
-    if (appSettingsRes.ok) {
-      setAppUsageEnabled((appSettingsRes.data as { enabled: boolean }).enabled)
-    }
-    if (checklistDismissRes.ok) {
-      const v = (checklistDismissRes.data as { value: unknown }).value
-      setChecklistDismissed(v === true)
+    if (weatherRes.ok) {
+      const w = weatherRes.data as { temp: number; description: string }
+      setCurrentWeather({ temp: Math.round(w.temp), description: w.description })
     }
     setInitialLoading(false)
   }, [])
@@ -279,7 +360,6 @@ export function HomeScreen(): ReactElement {
   useEffect(() => {
     const offMorning = window.auralith.on('briefing:morning', (data) => {
       setBriefing(data as BriefingPayload)
-      setBriefingOpen(true)
     })
     const offShow = window.auralith.on('briefing:show', (data) => {
       const payload = data as {
@@ -288,16 +368,13 @@ export function HomeScreen(): ReactElement {
         startAt?: number
         location?: string
       }
-      if (payload.type === 'morning' || payload.type === 'leisure') {
-        setBriefingOpen(true)
-      } else if (payload.type === 'event-prep' && payload.eventTitle && payload.startAt) {
-        const nextPayload: EventPrepPayload = {
+      if (payload.type === 'event-prep' && payload.eventTitle && payload.startAt) {
+        setEventPrep({
           type: 'event-prep',
           eventTitle: payload.eventTitle,
           startAt: payload.startAt,
           ...(payload.location ? { location: payload.location } : {}),
-        }
-        setEventPrep(nextPayload)
+        })
       }
     })
     return () => {
@@ -326,7 +403,7 @@ export function HomeScreen(): ReactElement {
         toast.error('Could not complete action')
         return
       }
-      setSuggestions((prev) => prev.filter((suggestion) => suggestion.id !== id))
+      setSuggestions((prev) => prev.filter((s) => s.id !== id))
       toast.success('Action completed')
     } finally {
       setActingOn(null)
@@ -335,689 +412,969 @@ export function HomeScreen(): ReactElement {
 
   async function dismissSuggestion(id: string): Promise<void> {
     const res = await window.auralith.invoke('suggest.dismiss', { id })
-    if (res.ok) setSuggestions((prev) => prev.filter((suggestion) => suggestion.id !== id))
-  }
-
-  async function dismissChecklist(): Promise<void> {
-    await window.auralith.invoke('settings.set', {
-      key: 'home.setupChecklistDismissed',
-      value: true,
-    })
-    setChecklistDismissed(true)
-  }
-
-  async function saveDashboardPreferences(
-    nextWidgets: WidgetId[],
-    nextNote: string,
-  ): Promise<void> {
-    const [widgetsRes, noteRes] = await Promise.all([
-      window.auralith.invoke('settings.set', { key: 'home.widgets', value: nextWidgets }),
-      window.auralith.invoke('settings.set', { key: 'home.customNote', value: nextNote }),
-    ])
-    if (!widgetsRes.ok || !noteRes.ok) {
-      toast.error('Failed to save dashboard layout')
-      return
-    }
-    setWidgetOrder(nextWidgets)
-    setCustomNote(nextNote)
-    toast.success('Dashboard updated')
-  }
-
-  function moveWidget(id: WidgetId, direction: -1 | 1): void {
-    const index = widgetOrder.indexOf(id)
-    const nextIndex = index + direction
-    if (index < 0 || nextIndex < 0 || nextIndex >= widgetOrder.length) return
-    const next = [...widgetOrder]
-    const [entry] = next.splice(index, 1)
-    if (!entry) return
-    next.splice(nextIndex, 0, entry)
-    setWidgetOrder(next)
-  }
-
-  function toggleWidget(id: WidgetId): void {
-    if (widgetOrder.includes(id)) {
-      setWidgetOrder((prev) => prev.filter((entry) => entry !== id))
-      return
-    }
-    setWidgetOrder((prev) => [...prev, id])
-  }
-
-  function openAssistantPrompt(prompt: string): void {
-    navigateTo('assistant')
-    requestAnimationFrame(() => {
-      window.dispatchEvent(new CustomEvent('auralith:assistant-prefill', { detail: prompt }))
-    })
-  }
-
-  const appUsageChart = useMemo<BarChartDatum[]>(() => {
-    const buckets = new Map<AppUsageRow['bucket'], number>()
-    for (const row of appUsageRows.slice(0, 8)) {
-      buckets.set(row.bucket, (buckets.get(row.bucket) ?? 0) + (row.durationMs ?? 0))
-    }
-    return Array.from(buckets.entries()).map(([bucket, value]) => ({
-      id: bucket,
-      label: bucket === 'productivity' ? 'Work' : bucket,
-      value,
-      tone:
-        bucket === 'browser'
-          ? 'info'
-          : bucket === 'productivity'
-            ? 'success'
-            : bucket === 'media'
-              ? 'warning'
-              : 'accent',
-    }))
-  }, [appUsageRows])
-
-  // ─── Setup checklist (pre-widget, dismissed by user) ───────────────────────
-
-  const showChecklist =
-    !checklistDismissed && (watchedFolders.length === 0 || !clipboardEnabled || !appUsageEnabled)
-
-  const checklistItems = [
-    ...(watchedFolders.length === 0
-      ? [
-          {
-            label: 'Set up file watching',
-            description: 'Track file changes and build your activity timeline.',
-            onClick: () => navigateTo('settings'),
-          },
-        ]
-      : []),
-    ...(!clipboardEnabled
-      ? [
-          {
-            label: 'Enable clipboard history',
-            description: 'Keep a private log of recent copied text.',
-            onClick: () => navigateTo('settings'),
-          },
-        ]
-      : []),
-    ...(!appUsageEnabled
-      ? [
-          {
-            label: 'Enable app usage tracking',
-            description: 'See how you spend your focus time by app category.',
-            onClick: () => navigateTo('settings'),
-          },
-        ]
-      : []),
-  ]
-
-  // ─── Widget cards ──────────────────────────────────────────────────────────
-
-  const widgetCards: Record<WidgetId, ReactElement> = {
-    briefing: (
-      <WidgetCard
-        key="briefing"
-        title="Morning briefing"
-        subtitle={
-          briefing
-            ? new Date(briefing.generatedAt).toLocaleTimeString([], {
-                hour: '2-digit',
-                minute: '2-digit',
-              })
-            : 'Generated when available'
-        }
-        action={
-          briefing ? (
-            <button
-              onClick={() => setBriefingOpen((prev) => !prev)}
-              className="rounded-lg border border-[var(--color-border-subtle)] px-2 py-1 text-xs text-[var(--color-text-secondary)] transition hover:bg-white/[0.04]"
-            >
-              {briefingOpen ? 'Collapse' : 'Expand'}
-            </button>
-          ) : (
-            <button
-              onClick={() => void generateBriefing()}
-              disabled={briefingLoading}
-              className="inline-flex items-center gap-1 rounded-lg border border-[var(--color-border-subtle)] px-2 py-1 text-xs text-[var(--color-text-secondary)] transition hover:bg-white/[0.04] disabled:opacity-50"
-            >
-              {briefingLoading ? (
-                <RefreshCw className="h-3 w-3 animate-spin" />
-              ) : (
-                <Zap className="h-3 w-3" />
-              )}
-              Generate
-            </button>
-          )
-        }
-        colSpan={2}
-      >
-        {briefing ? (
-          <div className="space-y-4">
-            {briefing.weather && (
-              <div className="rounded-xl border border-[var(--color-border-hairline)] bg-[var(--color-bg-2)]/40 px-4 py-3 text-sm text-[var(--color-text-primary)]">
-                <div className="flex items-center gap-2">
-                  <CloudSun className="h-4 w-4 text-sky-300 shrink-0" />
-                  <span>{briefing.weather.summary}</span>
-                  {briefing.tone === 'leisure' && (
-                    <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-violet-500/15 px-2 py-0.5 text-[11px] text-violet-200">
-                      <Coffee className="h-3 w-3" />
-                      Leisure
-                    </span>
-                  )}
-                </div>
-              </div>
-            )}
-            {briefingOpen && (
-              <div className="grid gap-3 xl:grid-cols-2">
-                {briefing.newsClusters.map((cluster, index) => (
-                  <div
-                    key={`${cluster.topicName}-${index}`}
-                    className="rounded-xl border border-[var(--color-border-hairline)] bg-[var(--color-bg-2)]/40 px-4 py-4"
-                  >
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-tertiary)]">
-                      {cluster.topicName}
-                    </p>
-                    <div className="mt-2">{renderMarkdown(cluster.summary)}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          <p className="text-sm text-[var(--color-text-tertiary)]">
-            No briefing yet. Click Generate to build one from your news and weather data.
-          </p>
-        )}
-      </WidgetCard>
-    ),
-
-    suggestions: (
-      <WidgetCard
-        key="suggestions"
-        title="Suggestions"
-        subtitle={`${suggestions.length} open suggestion${suggestions.length === 1 ? '' : 's'}`}
-        action={
-          <button
-            onClick={() => void loadDashboard()}
-            className="rounded-lg border border-[var(--color-border-subtle)] p-2 text-[var(--color-text-secondary)] transition hover:bg-white/[0.04]"
-            aria-label="Refresh dashboard"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </button>
-        }
-        colSpan={2}
-      >
-        {suggestions.length === 0 ? (
-          <p className="text-sm text-[var(--color-text-tertiary)]">Nothing pending right now.</p>
-        ) : (
-          <motion.div
-            className="space-y-3"
-            variants={staggerListVariants}
-            initial="hidden"
-            animate="visible"
-          >
-            {suggestions.map((suggestion) => (
-              <motion.div
-                key={suggestion.id}
-                variants={staggerItemVariants}
-                className="rounded-xl border border-[var(--color-border-hairline)] bg-[var(--color-bg-2)]/40 px-4 py-4"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <Sparkles className="h-4 w-4 shrink-0 text-violet-300" />
-                      <p className="text-sm font-medium text-[var(--color-text-primary)]">
-                        {suggestion.title}
-                      </p>
-                      {LEISURE_KINDS.has(suggestion.kind) && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-violet-500/15 px-2 py-0.5 text-[11px] text-violet-200">
-                          <Coffee className="h-3 w-3" />
-                          Weekend
-                        </span>
-                      )}
-                    </div>
-                    <p className="mt-2 text-xs leading-relaxed text-[var(--color-text-tertiary)]">
-                      {suggestion.rationale}
-                    </p>
-                    {(() => {
-                      const desc = describeSuggestedAction(suggestion.proposedActionJson)
-                      return desc ? (
-                        <span className="mt-1.5 inline-block text-[11px] px-2 py-0.5 rounded-full bg-[var(--color-accent-low)]/10 text-[var(--color-accent-mid)] border border-[var(--color-accent-low)]/20">
-                          {desc}
-                        </span>
-                      ) : null
-                    })()}
-                  </div>
-                  <span className="text-[11px] text-[var(--color-text-tertiary)]">
-                    {formatTime(suggestion.createdAt)}
-                  </span>
-                </div>
-                <div className="mt-3 flex items-center gap-2">
-                  <button
-                    onClick={() => void acceptSuggestion(suggestion.id)}
-                    disabled={actingOn === suggestion.id}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--color-accent-low)] px-3 py-2 text-xs font-medium text-white transition hover:opacity-90 disabled:opacity-50"
-                  >
-                    {actingOn === suggestion.id ? (
-                      <RefreshCw className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <CheckCircle className="h-3 w-3" />
-                    )}
-                    {suggestion.tier === 'safe' ? 'Do it' : 'Review'}
-                  </button>
-                  <button
-                    onClick={() => void dismissSuggestion(suggestion.id)}
-                    className="inline-flex items-center gap-1 rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-xs text-[var(--color-text-secondary)] transition hover:bg-white/[0.04]"
-                  >
-                    <X className="h-3 w-3" />
-                    Dismiss
-                  </button>
-                </div>
-              </motion.div>
-            ))}
-          </motion.div>
-        )}
-      </WidgetCard>
-    ),
-
-    'quick-actions': (
-      <WidgetCard key="quick-actions" title="Quick actions" subtitle="Command deck shortcuts">
-        <div className="grid gap-2 sm:grid-cols-2">
-          {[
-            {
-              label: 'Capture screen',
-              icon: <Camera className="h-4 w-4" />,
-              onClick: () => window.dispatchEvent(new CustomEvent('auralith:run-capture')),
-            },
-            {
-              label: 'Open notifications',
-              icon: <Bell className="h-4 w-4" />,
-              onClick: () => window.dispatchEvent(new CustomEvent('auralith:notifications-open')),
-            },
-            {
-              label: 'Ask assistant',
-              icon: <MessageSquare className="h-4 w-4" />,
-              onClick: () => navigateTo('assistant'),
-            },
-            {
-              label: 'Spotlight',
-              icon: <WandSparkles className="h-4 w-4" />,
-              onClick: () => window.dispatchEvent(new CustomEvent('auralith:spotlight-open')),
-            },
-          ].map((item) => (
-            <button
-              key={item.label}
-              onClick={item.onClick}
-              className="flex items-center gap-2 rounded-xl border border-[var(--color-border-hairline)] bg-[var(--color-bg-2)]/40 px-4 py-3 text-left text-sm text-[var(--color-text-primary)] transition hover:bg-[var(--color-bg-2)]/60"
-            >
-              {item.icon}
-              {item.label}
-            </button>
-          ))}
-        </div>
-      </WidgetCard>
-    ),
-
-    'recent-activity': (
-      <WidgetCard key="recent-activity" title="Recent activity" subtitle="Latest timeline events">
-        <div className="space-y-3">
-          {recentActivity.length === 0 ? (
-            <div className="flex flex-col gap-2">
-              <p className="text-sm text-[var(--color-text-tertiary)]">No tracked activity yet.</p>
-              <button
-                onClick={() => navigateTo('settings')}
-                className="self-start text-xs text-violet-400 hover:text-violet-300 transition-colors"
-              >
-                Set up file watching →
-              </button>
-            </div>
-          ) : (
-            <motion.div
-              className="space-y-3"
-              variants={staggerListVariants}
-              initial="hidden"
-              animate="visible"
-            >
-              {recentActivity.map((event) => (
-                <motion.button
-                  key={event.id}
-                  variants={staggerItemVariants}
-                  whileHover={{ scale: 1.01, y: -1 }}
-                  whileTap={{ scale: 0.99 }}
-                  onClick={() => navigateTo('activity')}
-                  className={ROW_CLS}
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[11px] uppercase tracking-[0.12em] text-[var(--color-text-tertiary)]">
-                      {event.kind}
-                    </p>
-                    <p className="mt-1 truncate text-sm text-[var(--color-text-primary)]">
-                      {basename(event.path)}
-                    </p>
-                  </div>
-                  <span className="ml-3 text-xs text-[var(--color-text-tertiary)]">
-                    {formatTime(event.ts)}
-                  </span>
-                </motion.button>
-              ))}
-            </motion.div>
-          )}
-        </div>
-      </WidgetCard>
-    ),
-
-    clipboard: (
-      <WidgetCard key="clipboard" title="Clipboard" subtitle="Recent copied text">
-        <div className="space-y-3">
-          {clipboardItems.length === 0 ? (
-            <div className="flex flex-col gap-2">
-              <p className="text-sm text-[var(--color-text-tertiary)]">
-                Clipboard history is empty or disabled.
-              </p>
-              <button
-                onClick={() => navigateTo('settings')}
-                className="self-start text-xs text-violet-400 hover:text-violet-300 transition-colors"
-              >
-                Enable clipboard history →
-              </button>
-            </div>
-          ) : (
-            <motion.div
-              className="space-y-3"
-              variants={staggerListVariants}
-              initial="hidden"
-              animate="visible"
-            >
-              {clipboardItems.map((item) => (
-                <motion.button
-                  key={item.id}
-                  variants={staggerItemVariants}
-                  whileHover={{ scale: 1.01, y: -1 }}
-                  whileTap={{ scale: 0.99 }}
-                  onClick={() => navigateTo('activity')}
-                  className={ROW_BTN_CLS}
-                >
-                  <Clipboard className="mt-0.5 h-4 w-4 shrink-0 text-violet-300" />
-                  <div className="min-w-0 flex-1">
-                    <p className="line-clamp-2 text-sm text-[var(--color-text-primary)]">
-                      {item.redacted ? 'Sensitive content was redacted.' : item.textValue}
-                    </p>
-                    <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-                      {item.charCount ?? 0} chars · {formatTime(item.ts)}
-                    </p>
-                  </div>
-                </motion.button>
-              ))}
-            </motion.div>
-          )}
-        </div>
-      </WidgetCard>
-    ),
-
-    'app-usage': (
-      <WidgetCard key="app-usage" title="Focus mix" subtitle="Recent app categories">
-        {appUsageChart.length === 0 ? (
-          <div className="flex flex-col gap-2">
-            <p className="text-sm text-[var(--color-text-tertiary)]">
-              App usage tracking is empty or disabled.
-            </p>
-            <button
-              onClick={() => navigateTo('settings')}
-              className="self-start text-xs text-violet-400 hover:text-violet-300 transition-colors"
-            >
-              Enable app tracking →
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <BarChart data={appUsageChart} />
-            <div className="space-y-2">
-              {appUsageRows.slice(0, 4).map((row) => (
-                <button key={row.id} onClick={() => navigateTo('activity')} className={ROW_CLS}>
-                  <div className="flex items-center gap-2">
-                    <Monitor className="h-4 w-4 text-violet-300" />
-                    <span className="text-sm text-[var(--color-text-primary)]">
-                      {row.processName}
-                    </span>
-                  </div>
-                  <span className="text-xs text-[var(--color-text-tertiary)]">
-                    {formatDuration(row.durationMs)}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </WidgetCard>
-    ),
-
-    'prompt-library': (
-      <WidgetCard key="prompt-library" title="Prompt library" subtitle="Reusable assistant starts">
-        <div className="space-y-3">
-          {promptPresets.slice(0, 4).map((preset) => (
-            <button
-              key={preset.id}
-              onClick={() => openAssistantPrompt(preset.prompt)}
-              className={ROW_BTN_CLS}
-            >
-              <BookOpen className="mt-0.5 h-4 w-4 shrink-0 text-violet-300" />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-[var(--color-text-primary)]">
-                  {preset.name}
-                </p>
-                <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-[var(--color-text-tertiary)]">
-                  {preset.prompt}
-                </p>
-              </div>
-            </button>
-          ))}
-        </div>
-      </WidgetCard>
-    ),
-
-    'custom-note': (
-      <WidgetCard key="custom-note" title="Pinned note" subtitle="A lightweight home note">
-        <p
-          className={[
-            'whitespace-pre-wrap text-sm leading-relaxed',
-            customNote
-              ? 'text-[var(--color-text-primary)]'
-              : 'italic text-[var(--color-text-tertiary)]',
-          ].join(' ')}
-        >
-          {customNote || 'Pin a note here to turn Home into a lightweight command deck.'}
-        </p>
-      </WidgetCard>
-    ),
+    if (res.ok) setSuggestions((prev) => prev.filter((s) => s.id !== id))
   }
 
   if (initialLoading) {
     return (
-      <div className="flex h-full flex-col overflow-hidden">
-        <div className="mx-auto w-full max-w-[1240px] px-8 pb-12 pt-16">
-          <div className="mb-10 h-12 w-64 animate-pulse rounded-xl bg-white/[0.04]" />
-          <WidgetGrid>
-            {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="h-40 animate-pulse rounded-2xl bg-white/[0.04]" />
-            ))}
-          </WidgetGrid>
+      <div style={{ display: 'flex', height: '100%', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ maxWidth: 1200, margin: '0 auto', width: '100%', padding: '64px 40px 48px' }}>
+          <div
+            className="skeleton"
+            style={{ height: 40, width: 240, borderRadius: 12, marginBottom: 8 }}
+          />
+          <div
+            className="skeleton"
+            style={{ height: 14, width: 160, borderRadius: 8, marginBottom: 40 }}
+          />
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0,1.4fr) minmax(260px,1fr)',
+              gap: 18,
+            }}
+          >
+            <div className="skeleton" style={{ height: 260, borderRadius: 16 }} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="skeleton" style={{ height: 80, borderRadius: 14 }} />
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex h-full flex-col overflow-y-auto">
-        <div className="mx-auto w-full max-w-[1240px] px-8 pb-12">
-          {/* Hero header */}
-          <FadeRise>
-            <div className="flex items-end justify-between gap-6 pb-10 pt-16">
-              <div>
-                <h1 className="text-[36px] font-semibold tracking-tight text-[var(--color-text-primary)]">
-                  {greeting()}
-                </h1>
-                <p className="mt-2 text-sm text-[var(--color-text-tertiary)]">
-                  {new Date().toLocaleDateString([], {
-                    weekday: 'long',
-                    month: 'long',
-                    day: 'numeric',
-                  })}
-                </p>
-              </div>
-              <button
-                onClick={() => setCustomizeOpen(true)}
-                className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-2)]/40 px-4 py-2.5 text-sm text-[var(--color-text-primary)] transition hover:bg-[var(--color-bg-2)]/60"
-              >
-                Customize dashboard
-              </button>
-            </div>
-          </FadeRise>
+    <div style={{ display: 'flex', height: '100%', flexDirection: 'column', overflowY: 'auto' }}>
+      <div style={{ maxWidth: 1200, margin: '0 auto', width: '100%', padding: '0 40px 48px' }}>
+        {/* ── Hero header ─────────────────────────────────────────────────── */}
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, ease: [0.2, 0.8, 0.2, 1] }}
+          style={{
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'space-between',
+            padding: '64px 0 28px',
+          }}
+        >
+          <div>
+            <h1
+              style={{
+                fontFamily: 'var(--font-display)',
+                fontSize: 36,
+                fontWeight: 500,
+                letterSpacing: '-0.02em',
+                lineHeight: 1.15,
+                color: 'var(--color-text-primary)',
+                margin: 0,
+              }}
+            >
+              {greeting()}.
+            </h1>
+            <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)', marginTop: 6 }}>
+              {new Date().toLocaleDateString([], {
+                weekday: 'long',
+                month: 'long',
+                day: 'numeric',
+              })}
+              {briefing ? ` · briefing refreshed ${fmtAgo(briefing.generatedAt)}` : ''}
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <GhostBtn icon={<RefreshCw size={13} />} onClick={() => void loadDashboard()}>
+              Refresh
+            </GhostBtn>
+            <GhostBtn
+              icon={<Mic size={13} />}
+              onClick={() => window.dispatchEvent(new CustomEvent('auralith:voice-open'))}
+            >
+              Voice
+            </GhostBtn>
+            <PrimaryBtn icon={<Sparkles size={13} />} onClick={() => navigateTo('assistant')}>
+              Ask Auralith
+            </PrimaryBtn>
+          </div>
+        </motion.div>
 
-          {/* Event prep card */}
-          <AnimatePresence>
-            {eventPrep && (
+        {/* ── Event prep ──────────────────────────────────────────────────── */}
+        <AnimatePresence>
+          {eventPrep && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              style={{ marginBottom: 18, overflow: 'hidden' }}
+            >
               <EventPrepCard payload={eventPrep} onDismiss={() => setEventPrep(null)} />
-            )}
-          </AnimatePresence>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-          {/* Setup checklist — pre-widget, not part of customizable order */}
-          <AnimatePresence>
-            {showChecklist && (
-              <motion.div
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.18 }}
-                className="mb-5 rounded-2xl border border-[var(--color-border-hairline)] bg-[var(--color-bg-2)]/50 p-5"
-              >
-                <div className="mb-4 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <CheckSquare className="h-4 w-4 text-violet-300" />
-                    <p className="text-sm font-semibold text-[var(--color-text-primary)]">
-                      Finish setup
-                    </p>
-                  </div>
+        {/* ── Top grid: hero briefing + suggestions ───────────────────────── */}
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.32, delay: 0.06, ease: [0.2, 0.8, 0.2, 1] }}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0,1.4fr) minmax(260px,1fr)',
+            gap: 18,
+            alignItems: 'start',
+            marginBottom: 36,
+          }}
+        >
+          {/* Hero briefing card */}
+          <Card style={{ padding: 24 }}>
+            {/* Header */}
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: 18,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: 'var(--color-accent-high)',
+                    display: 'inline-block',
+                  }}
+                />
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 600,
+                    letterSpacing: '0.14em',
+                    textTransform: 'uppercase',
+                    color: 'var(--color-accent-high)',
+                  }}
+                >
+                  Your briefing
+                </span>
+              </div>
+              {briefing && (
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: '3px 10px',
+                    borderRadius: 999,
+                    background: 'rgba(255,255,255,0.05)',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    fontSize: 10,
+                    color: 'var(--color-text-secondary)',
+                    fontFamily: 'var(--font-mono)',
+                  }}
+                >
+                  <Clock size={10} />
+                  {briefing.newsClusters.length > 0
+                    ? `${briefing.newsClusters.length} clusters`
+                    : '—'}
+                </span>
+              )}
+            </div>
+
+            {briefing ? (
+              <div>
+                {/* Play row */}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '80px 1fr',
+                    gap: 18,
+                    alignItems: 'center',
+                    marginBottom: 20,
+                  }}
+                >
                   <button
-                    onClick={() => void dismissChecklist()}
-                    className="rounded-md p-1 text-[var(--color-text-tertiary)] transition hover:bg-white/[0.06]"
-                    aria-label="Dismiss checklist"
+                    onClick={() => void generateBriefing()}
+                    disabled={briefingLoading}
+                    style={{
+                      width: 80,
+                      height: 80,
+                      borderRadius: 20,
+                      background:
+                        'var(--color-accent-gradient, linear-gradient(135deg,#7c3aed,#6366f1))',
+                      border: 0,
+                      cursor: 'pointer',
+                      color: 'white',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow:
+                        '0 8px 28px rgba(124,58,237,0.32), inset 0 0 0 1px rgba(255,255,255,0.18)',
+                      transition: 'transform 160ms',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'scale(1.05)'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'scale(1)'
+                    }}
+                    title="Re-generate briefing"
                   >
-                    <X className="h-3.5 w-3.5" />
+                    {briefingLoading ? (
+                      <RefreshCw size={24} className="animate-spin" />
+                    ) : (
+                      <Play size={26} strokeWidth={2.5} style={{ marginLeft: 3 }} />
+                    )}
+                  </button>
+                  <div>
+                    <div
+                      style={{
+                        fontFamily: 'var(--font-display)',
+                        fontSize: 20,
+                        fontWeight: 500,
+                        letterSpacing: '-0.01em',
+                        lineHeight: 1.25,
+                        marginBottom: 6,
+                      }}
+                    >
+                      {new Date().toLocaleDateString([], { weekday: 'long' })} morning brief.
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: 'var(--color-text-secondary)',
+                        marginBottom: 10,
+                      }}
+                    >
+                      {briefing.weather?.summary ?? 'No weather data.'}{' '}
+                      {briefing.tone === 'leisure' && '· leisure mode'}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {briefing.newsClusters.slice(0, 3).map((c) => (
+                        <span
+                          key={c.topicName}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            padding: '3px 10px',
+                            borderRadius: 999,
+                            background: 'rgba(255,255,255,0.05)',
+                            border: '1px solid rgba(255,255,255,0.08)',
+                            fontSize: 10,
+                            color: 'var(--color-text-secondary)',
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: 4,
+                              height: 4,
+                              borderRadius: '50%',
+                              background: 'var(--color-accent-mid)',
+                              display: 'inline-block',
+                            }}
+                          />
+                          {c.topicName} ·{' '}
+                          <span style={{ fontFamily: 'var(--font-mono)', opacity: 0.7 }}>
+                            {c.itemCount}
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Divider */}
+                <div
+                  style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '0 0 16px' }}
+                />
+
+                {/* Cluster summaries */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {briefing.newsClusters.slice(0, 2).map((c) => (
+                    <div
+                      key={c.topicName}
+                      style={{
+                        fontSize: 13,
+                        color: 'var(--color-text-secondary)',
+                        lineHeight: 1.55,
+                      }}
+                    >
+                      <span style={{ color: 'var(--color-text-primary)', fontWeight: 600 }}>
+                        {c.topicName}.{' '}
+                      </span>
+                      <span className="prose-auralith">{renderMarkdown(c.summary)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              /* No briefing yet */
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 14,
+                  padding: '24px 0',
+                  textAlign: 'center',
+                }}
+              >
+                <div
+                  style={{
+                    width: 56,
+                    height: 56,
+                    borderRadius: 18,
+                    background:
+                      'var(--color-accent-gradient, linear-gradient(135deg,#7c3aed,#6366f1))',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: '0 8px 28px rgba(124,58,237,0.28)',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => void generateBriefing()}
+                >
+                  {briefingLoading ? (
+                    <RefreshCw size={22} color="white" className="animate-spin" />
+                  ) : (
+                    <Play size={22} color="white" strokeWidth={2.5} style={{ marginLeft: 2 }} />
+                  )}
+                </div>
+                <div>
+                  <p
+                    style={{
+                      fontSize: 15,
+                      fontWeight: 600,
+                      color: 'var(--color-text-primary)',
+                      marginBottom: 4,
+                    }}
+                  >
+                    No briefing yet
+                  </p>
+                  <p style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                    Generate one from your news and weather data.
+                  </p>
+                </div>
+                <PrimaryBtn
+                  icon={<Sparkles size={13} />}
+                  onClick={() => void generateBriefing()}
+                  disabled={briefingLoading}
+                >
+                  {briefingLoading ? 'Generating…' : 'Generate briefing'}
+                </PrimaryBtn>
+              </div>
+            )}
+          </Card>
+
+          {/* Suggestions rail */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div
+              style={{
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+                color: 'var(--color-text-tertiary)',
+                padding: '2px 4px 6px',
+              }}
+            >
+              Might want to act on
+            </div>
+            <AnimatePresence initial={false}>
+              {suggestions.length === 0 ? (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  style={{
+                    padding: '20px 16px',
+                    borderRadius: 14,
+                    textAlign: 'center',
+                    border: '1px solid rgba(255,255,255,0.06)',
+                    background: 'rgba(20,20,30,0.32)',
+                    color: 'var(--color-text-tertiary)',
+                    fontSize: 13,
+                  }}
+                >
+                  Nothing pending right now.
+                </motion.div>
+              ) : (
+                suggestions.map((s, i) => {
+                  const tc = tierColor(s.tier)
+                  const isLeisure = LEISURE_KINDS.has(s.kind)
+                  return (
+                    <motion.div
+                      key={s.id}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                      transition={{ duration: 0.22, delay: i * 0.04, ease: [0.2, 0.8, 0.2, 1] }}
+                      style={{
+                        padding: 16,
+                        borderRadius: 14,
+                        border: '1px solid rgba(255,255,255,0.07)',
+                        background: 'rgba(20,20,30,0.46)',
+                      }}
+                    >
+                      <div
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}
+                      >
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            padding: '2px 8px',
+                            borderRadius: 999,
+                            background: tc.bg,
+                            fontSize: 10,
+                            fontWeight: 500,
+                            color: tc.dot,
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: 5,
+                              height: 5,
+                              borderRadius: '50%',
+                              background: 'currentColor',
+                              display: 'inline-block',
+                            }}
+                          />
+                          {tc.label}
+                        </span>
+                        {isLeisure && (
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 3,
+                              padding: '2px 8px',
+                              borderRadius: 999,
+                              background: 'rgba(139,92,246,0.15)',
+                              fontSize: 10,
+                              color: 'var(--color-accent-high)',
+                            }}
+                          >
+                            <Coffee size={9} />
+                            weekend
+                          </span>
+                        )}
+                        <span
+                          style={{
+                            marginLeft: 'auto',
+                            fontSize: 10,
+                            color: 'var(--color-text-tertiary)',
+                            fontFamily: 'var(--font-mono)',
+                          }}
+                        >
+                          {fmtAgo(s.createdAt)}
+                        </span>
+                      </div>
+                      <p
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 600,
+                          color: 'var(--color-text-primary)',
+                          marginBottom: 4,
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        {s.title}
+                      </p>
+                      <p
+                        style={{
+                          fontSize: 11,
+                          color: 'var(--color-text-tertiary)',
+                          lineHeight: 1.5,
+                          marginBottom: 12,
+                        }}
+                      >
+                        {s.rationale}
+                      </p>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <PrimaryBtn
+                          icon={
+                            actingOn === s.id ? (
+                              <RefreshCw size={12} className="animate-spin" />
+                            ) : (
+                              <CheckCircle size={12} />
+                            )
+                          }
+                          onClick={() => void acceptSuggestion(s.id)}
+                          disabled={actingOn === s.id}
+                        >
+                          {s.tier === 'confirm' ? 'Review & send' : isLeisure ? 'Resume' : 'Run'}
+                        </PrimaryBtn>
+                        <GhostBtn onClick={() => void dismissSuggestion(s.id)}>
+                          <X size={12} />
+                          Dismiss
+                        </GhostBtn>
+                      </div>
+                    </motion.div>
+                  )
+                })
+              )}
+            </AnimatePresence>
+          </div>
+        </motion.div>
+
+        {/* ── Ambient section ──────────────────────────────────────────────── */}
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.32, delay: 0.12, ease: [0.2, 0.8, 0.2, 1] }}
+        >
+          <SectionHead
+            eyebrow="Ambient"
+            title="What's happening around you"
+            right={
+              <GhostBtn icon={<ExternalLink size={12} />} onClick={() => navigateTo('activity')}>
+                Open activity
+              </GhostBtn>
+            }
+          />
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(240px,1fr))',
+              gap: 18,
+              marginBottom: 36,
+            }}
+          >
+            {/* Activity pulse */}
+            <Card style={{ padding: 20 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  justifyContent: 'space-between',
+                  marginBottom: 14,
+                }}
+              >
+                <div>
+                  <div
+                    style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)' }}
+                  >
+                    Activity pulse
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
+                    last 12 hours
+                  </div>
+                </div>
+                <div
+                  style={{
+                    width: 30,
+                    height: 30,
+                    borderRadius: 9,
+                    background: 'rgba(139,92,246,0.18)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'var(--color-accent-high)',
+                  }}
+                >
+                  <Activity size={15} />
+                </div>
+              </div>
+              {recentActivity.length === 0 ? (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: 'var(--color-text-tertiary)',
+                    textAlign: 'center',
+                    padding: '16px 0',
+                  }}
+                >
+                  No tracked activity yet.
+                  <br />
+                  <button
+                    onClick={() => navigateTo('settings')}
+                    style={{
+                      color: 'var(--color-accent-mid)',
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      fontSize: 11,
+                      marginTop: 6,
+                      fontFamily: 'var(--font-sans)',
+                    }}
+                  >
+                    Set up file watching →
                   </button>
                 </div>
-                <div className="space-y-2">
-                  {checklistItems.map((item) => (
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {recentActivity.slice(0, 4).map((ev) => (
                     <button
-                      key={item.label}
-                      onClick={item.onClick}
-                      className="flex w-full items-center justify-between rounded-xl border border-[var(--color-border-hairline)] bg-[var(--color-bg-2)]/40 px-4 py-3 text-left transition hover:bg-[var(--color-bg-2)]/60"
+                      key={ev.id}
+                      onClick={() => navigateTo('activity')}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '8px 10px',
+                        borderRadius: 8,
+                        border: '1px solid rgba(255,255,255,0.05)',
+                        background: 'rgba(255,255,255,0.025)',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        transition: 'background 120ms, border-color 120ms',
+                        fontFamily: 'var(--font-sans)',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = 'rgba(255,255,255,0.05)'
+                        e.currentTarget.style.borderColor = 'rgba(255,255,255,0.10)'
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'rgba(255,255,255,0.025)'
+                        e.currentTarget.style.borderColor = 'rgba(255,255,255,0.05)'
+                      }}
                     >
-                      <div>
-                        <p className="text-sm text-[var(--color-text-primary)]">{item.label}</p>
-                        <p className="text-xs text-[var(--color-text-tertiary)]">
-                          {item.description}
-                        </p>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div
+                          style={{
+                            fontSize: 9,
+                            fontWeight: 600,
+                            letterSpacing: '0.12em',
+                            textTransform: 'uppercase',
+                            color: 'var(--color-text-tertiary)',
+                          }}
+                        >
+                          {ev.kind}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: 'var(--color-text-primary)',
+                            marginTop: 1,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {basename(ev.path)}
+                        </div>
                       </div>
-                      <span className="ml-3 text-xs text-violet-400">Go to Settings →</span>
+                      <span
+                        style={{
+                          fontSize: 10,
+                          color: 'var(--color-text-tertiary)',
+                          fontFamily: 'var(--font-mono)',
+                          flexShrink: 0,
+                          marginLeft: 8,
+                        }}
+                      >
+                        {fmtAgo(ev.ts)}
+                      </span>
                     </button>
                   ))}
                 </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+              )}
+            </Card>
 
-          <FadeRise delay={80}>
-            <WidgetGrid>
-              {widgetOrder.map((widgetId, idx) => (
-                <motion.div
-                  key={widgetId}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.2, delay: idx * 0.05, ease: [0.2, 0.8, 0.2, 1] }}
-                >
-                  {widgetCards[widgetId]}
-                </motion.div>
-              ))}
-            </WidgetGrid>
-          </FadeRise>
-        </div>
-      </div>
-
-      {/* Customize dialog */}
-      <Dialog
-        open={customizeOpen}
-        onClose={() => setCustomizeOpen(false)}
-        title="Customize dashboard"
-        description="Choose which widgets stay on Home and set their order."
-      >
-        <div className="px-6 py-5">
-          <div className="space-y-3">
-            {DEFAULT_WIDGETS.map((widgetId) => {
-              const enabled = widgetOrder.includes(widgetId)
-              return (
+            {/* Top news teaser */}
+            {topNews ? (
+              <Card
+                onClick={() => navigateTo('news')}
+                style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}
+              >
                 <div
-                  key={widgetId}
-                  className="flex items-center justify-between rounded-xl border border-[var(--color-border-hairline)] bg-[var(--color-bg-2)]/40 px-4 py-3"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    justifyContent: 'space-between',
+                  }}
                 >
                   <div>
-                    <p className="text-sm text-[var(--color-text-primary)]">
-                      {widgetId.replace(/-/g, ' ')}
-                    </p>
-                    <p className="text-xs text-[var(--color-text-tertiary)]">
-                      {enabled ? 'Visible on the dashboard' : 'Hidden from the dashboard'}
-                    </p>
+                    <div
+                      style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)' }}
+                    >
+                      {topNews.topicName ?? 'Top story'}
+                    </div>
+                    <div
+                      style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 2 }}
+                    >
+                      {topNews.sourceName ?? 'News'} · {fmtAgo(topNews.fetchedAt)}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => moveWidget(widgetId, -1)}
-                      disabled={!enabled}
-                      className="rounded-lg border border-[var(--color-border-subtle)] p-2 text-[var(--color-text-secondary)] transition hover:bg-white/[0.04] disabled:opacity-40"
-                    >
-                      <ChevronUp className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      onClick={() => moveWidget(widgetId, 1)}
-                      disabled={!enabled}
-                      className="rounded-lg border border-[var(--color-border-subtle)] p-2 text-[var(--color-text-secondary)] transition hover:bg-white/[0.04] disabled:opacity-40"
-                    >
-                      <ChevronDown className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      onClick={() => toggleWidget(widgetId)}
-                      className="rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-sm text-[var(--color-text-primary)] transition hover:bg-white/[0.04]"
-                    >
-                      {enabled ? 'Hide' : 'Show'}
-                    </button>
+                  <span
+                    style={{
+                      padding: '2px 10px',
+                      borderRadius: 999,
+                      background: 'rgba(96,165,250,0.12)',
+                      color: '#60a5fa',
+                      fontSize: 10,
+                      fontWeight: 500,
+                    }}
+                  >
+                    Story
+                  </span>
+                </div>
+                <div
+                  style={{
+                    height: 80,
+                    borderRadius: 10,
+                    background: 'rgba(96,165,250,0.06)',
+                    border: '1px solid rgba(96,165,250,0.12)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'rgba(96,165,250,0.4)',
+                  }}
+                >
+                  <Newspaper size={28} />
+                </div>
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    lineHeight: 1.4,
+                    color: 'var(--color-text-primary)',
+                  }}
+                >
+                  {topNews.headline}
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    fontSize: 11,
+                    color: 'var(--color-accent-mid)',
+                  }}
+                >
+                  Open in News <ChevronRight size={12} />
+                </div>
+              </Card>
+            ) : (
+              <Card style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <div
+                    style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)' }}
+                  >
+                    News
+                  </div>
+                  <div
+                    style={{
+                      width: 30,
+                      height: 30,
+                      borderRadius: 9,
+                      background: 'rgba(96,165,250,0.12)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#60a5fa',
+                    }}
+                  >
+                    <Newspaper size={15} />
                   </div>
                 </div>
-              )
-            })}
-          </div>
+                <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
+                  No news loaded yet.
+                </div>
+                <GhostBtn icon={<ExternalLink size={12} />} onClick={() => navigateTo('news')}>
+                  Open News
+                </GhostBtn>
+              </Card>
+            )}
 
-          <div className="mt-5 rounded-xl border border-[var(--color-border-hairline)] bg-[var(--color-bg-2)]/40 p-4">
-            <p className="text-sm font-medium text-[var(--color-text-primary)]">Pinned note</p>
-            <textarea
-              value={draftNote}
-              onChange={(event) => setDraftNote(event.target.value)}
-              rows={5}
-              placeholder="Pin a note here to turn Home into a lightweight command deck."
-              className="mt-3 w-full resize-y rounded-xl border border-[var(--color-border-subtle)] bg-white/[0.04] px-3 py-3 text-sm text-[var(--color-text-primary)] outline-none focus:border-[var(--color-border-accent)] placeholder:text-[var(--color-text-tertiary)]"
-            />
+            {/* Weather quick card */}
+            <Card onClick={() => navigateTo('weather')} style={{ padding: 20 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+                <div
+                  style={{
+                    fontFamily: 'var(--font-display)',
+                    fontSize: 38,
+                    lineHeight: 1,
+                    fontWeight: 300,
+                    color: 'var(--color-text-primary)',
+                  }}
+                >
+                  {currentWeather ? `${currentWeather.temp}°` : '—'}
+                </div>
+                <div>
+                  <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>Weather</div>
+                  <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                    {currentWeather ? currentWeather.description : 'Set up your location'}
+                  </div>
+                </div>
+              </div>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: 'var(--color-accent-mid)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+              >
+                Open Weather <ChevronRight size={11} />
+              </div>
+            </Card>
           </div>
+        </motion.div>
 
-          <div className="mt-5 flex justify-end gap-3">
-            <button
-              onClick={() => setCustomizeOpen(false)}
-              className="rounded-xl border border-[var(--color-border-subtle)] px-4 py-2 text-sm text-[var(--color-text-secondary)] transition hover:bg-white/[0.04]"
-            >
-              Close
-            </button>
-            <button
-              onClick={() => {
-                void saveDashboardPreferences(widgetOrder, draftNote)
-                setCustomizeOpen(false)
-              }}
-              className="rounded-xl bg-[var(--color-accent-low)] px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
-            >
-              Save layout
-            </button>
+        {/* ── Recent threads ───────────────────────────────────────────────── */}
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.32, delay: 0.18, ease: [0.2, 0.8, 0.2, 1] }}
+        >
+          <SectionHead
+            eyebrow="Assistant"
+            title="Recent threads"
+            right={
+              <GhostBtn icon={<Plus size={12} />} onClick={() => navigateTo('assistant')}>
+                New thread
+              </GhostBtn>
+            }
+          />
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px,1fr))',
+              gap: 12,
+            }}
+          >
+            {threads.length === 0 ? (
+              <Card style={{ padding: 20, gridColumn: '1/-1' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 10,
+                      background: 'rgba(139,92,246,0.14)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'var(--color-accent-high)',
+                    }}
+                  >
+                    <MessageSquare size={16} />
+                  </div>
+                  <div>
+                    <p
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 500,
+                        color: 'var(--color-text-primary)',
+                        marginBottom: 2,
+                      }}
+                    >
+                      No threads yet
+                    </p>
+                    <p style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                      Start a conversation with Auralith.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => navigateTo('assistant')}
+                    style={{
+                      marginLeft: 'auto',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      padding: '7px 14px',
+                      borderRadius: 8,
+                      background: 'var(--color-accent-low)',
+                      border: 'none',
+                      color: 'white',
+                      fontSize: 12,
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                      fontFamily: 'var(--font-sans)',
+                    }}
+                  >
+                    <Plus size={12} />
+                    New thread
+                  </button>
+                </div>
+              </Card>
+            ) : (
+              threads.map((t, i) => (
+                <motion.div
+                  key={t.id}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.22, delay: i * 0.04, ease: [0.2, 0.8, 0.2, 1] }}
+                >
+                  <Card
+                    onClick={() => {
+                      navigateTo('assistant')
+                      requestAnimationFrame(() => {
+                        window.dispatchEvent(
+                          new CustomEvent('auralith:assistant-open-thread', { detail: t.id }),
+                        )
+                      })
+                    }}
+                    style={{ padding: 14 }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <span
+                        style={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: '50%',
+                          background: 'rgba(139,92,246,0.6)',
+                          display: 'inline-block',
+                        }}
+                      />
+                      <span
+                        style={{
+                          fontSize: 10,
+                          color: 'var(--color-text-tertiary)',
+                          fontFamily: 'var(--font-mono)',
+                        }}
+                      >
+                        {t.lastMessageAt ? fmtAgo(t.lastMessageAt) : '—'}
+                      </span>
+                      {t.messageCount != null && (
+                        <span
+                          style={{
+                            marginLeft: 'auto',
+                            fontSize: 10,
+                            color: 'var(--color-text-tertiary)',
+                            fontFamily: 'var(--font-mono)',
+                          }}
+                        >
+                          {t.messageCount} msgs
+                        </span>
+                      )}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 500,
+                        lineHeight: 1.35,
+                        color: 'var(--color-text-primary)',
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {t.title ?? 'Untitled thread'}
+                    </div>
+                  </Card>
+                </motion.div>
+              ))
+            )}
           </div>
-        </div>
-      </Dialog>
+        </motion.div>
+      </div>
     </div>
   )
 }

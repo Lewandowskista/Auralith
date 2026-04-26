@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, lazy, Suspense } from 'react'
 import type { ReactElement, ComponentType } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, motion, MotionConfig } from 'framer-motion'
 import { Toaster } from 'sonner'
 import {
   Bell,
@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { NavRail } from './NavRail'
 import type { NavSection } from './NavRail'
+import { ContextPanel } from './ContextPanel'
 import { CommandPalette, type PaletteItem } from './CommandPalette'
 import { ConfirmActionSheet } from './ConfirmActionSheet'
 import type { ConfirmActionRequest } from './ConfirmActionSheet'
@@ -29,6 +30,7 @@ import { useTheme } from '../context/ThemeContext'
 import { ErrorBoundary } from './ErrorBoundary'
 import { AuralithOrb } from './AuralithOrb'
 import { VoiceCaptureBridge } from './VoiceCaptureBridge'
+import { TransientConfirmToast } from './TransientConfirmToast'
 import { TitleBar } from './TitleBar'
 import { toast } from 'sonner'
 import { loadPromptPresets } from '../lib/prompt-presets'
@@ -95,6 +97,8 @@ export function AppShell(): ReactElement {
   const [confirmRequest, setConfirmRequest] = useState<ConfirmActionRequest | null>(null)
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null)
   const [spotlightOpen, setSpotlightOpen] = useState(false)
+  const [pinRail, setPinRail] = useState(false)
+  const [contextPanelOpen, setContextPanelOpen] = useState(true)
 
   // Check whether onboarding has been done
   useEffect(() => {
@@ -374,10 +378,12 @@ export function AppShell(): ReactElement {
     runQuickCapture,
   ])
 
-  // Listen for confirm-action requests from main process
+  // Listen for confirm-action requests from main process (modal tiers only — transient handled by TransientConfirmToast)
   useEffect(() => {
     const unsub = window.auralith.on('tool.confirmRequest', (data) => {
-      setConfirmRequest(data as ConfirmActionRequest)
+      const raw = data as Record<string, unknown>
+      if (raw['tier'] === 'confirm-transient') return
+      setConfirmRequest(raw as unknown as ConfirmActionRequest)
     })
     return unsub
   }, [])
@@ -495,134 +501,158 @@ export function AppShell(): ReactElement {
   }
 
   return (
-    <div
-      className="flex flex-col h-full w-full overflow-hidden"
-      style={{ background: 'var(--color-bg-0)' }}
-    >
-      {/* Global liquid ether backdrop — fixed behind everything */}
-      <EtherBackdrop
-        className="fixed inset-0 w-full h-full"
-        style={{ zIndex: 0 }}
-        opacity={0.55}
-        theme={resolvedTheme}
-      />
-
-      {/* Custom title bar with semaphore window controls */}
-      <TitleBar
-        notificationCount={notificationCount}
-        onOpenNotifications={openNotifications}
-        onOpenPalette={() => openPalette()}
-        onOpenSpotlight={openSpotlight}
-      />
-
-      {/* Skip-to-content link — keyboard accessibility */}
-      <a
-        href="#main-content"
-        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[100] focus:px-3 focus:py-1.5 focus:rounded-md focus:text-sm focus:bg-accent-low focus:text-white"
+    <MotionConfig reducedMotion="user">
+      <div
+        className="flex flex-col h-full w-full overflow-hidden"
+        style={{ background: 'var(--color-bg-0)' }}
       >
-        Skip to main content
-      </a>
+        {/* Global liquid ether backdrop — fixed behind everything */}
+        <EtherBackdrop
+          className="fixed inset-0 w-full h-full"
+          style={{ zIndex: 0 }}
+          opacity={0.55}
+          theme={resolvedTheme}
+        />
 
-      {/* Content row — pushed down by title bar height */}
-      <div className="flex flex-1 overflow-hidden" style={{ marginTop: 36 }}>
-        {/* Nav rail */}
-        <div className="relative z-10">
-          <NavRail active={activeSection} onNavigate={setActiveSection} />
-        </div>
+        {/* Custom title bar with semaphore window controls */}
+        <TitleBar
+          notificationCount={notificationCount}
+          activeSection={activeSection}
+          onOpenNotifications={openNotifications}
+          onOpenPalette={() => openPalette()}
+          onOpenSpotlight={openSpotlight}
+          onOpenVoice={() => window.dispatchEvent(new CustomEvent('auralith:voice-open'))}
+        />
 
-        {/* Main content area */}
-        <main className="flex-1 relative overflow-hidden z-10" id="main-content" tabIndex={-1}>
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div
-              key={activeSection}
-              className="absolute inset-0"
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{
-                duration: motionDuration.standard / 1000,
-                ease: motionEasing.standard,
-              }}
-            >
-              <ErrorBoundary key={activeSection} fallbackTitle={`Error in ${activeSection}`}>
-                <Suspense fallback={<ScreenFallback />}>
-                  <ActiveScreen />
-                </Suspense>
-              </ErrorBoundary>
-            </motion.div>
-          </AnimatePresence>
-        </main>
-      </div>
-      {/* end content row */}
+        {/* Skip-to-content link — keyboard accessibility */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[100] focus:px-3 focus:py-1.5 focus:rounded-md focus:text-sm focus:bg-accent-low focus:text-white"
+        >
+          Skip to main content
+        </a>
 
-      {/* Command palette */}
-      <CommandPalette
-        open={paletteOpen}
-        onClose={closePalette}
-        items={paletteItems}
-        prefill={palettePrefill}
-      />
-      <ShortcutsDialog open={shortcutsOpen} onClose={closeShortcuts} />
-      <NotificationCenter open={notificationCenterOpen} onClose={closeNotifications} />
-
-      {/* Spotlight — in-app modal with frosted backdrop */}
-      <AnimatePresence>
-        {spotlightOpen && (
-          <>
-            <motion.div
-              key="spotlight-backdrop"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.18 }}
-              className="fixed inset-0 z-[200]"
-              style={{
-                background: 'rgba(0,0,0,0.45)',
-                backdropFilter: 'blur(12px)',
-                WebkitBackdropFilter: 'blur(12px)',
-              }}
-              onClick={() => setSpotlightOpen(false)}
+        {/* Content row — pushed down by title bar height */}
+        <div className="flex flex-1 overflow-hidden" style={{ marginTop: 40 }}>
+          {/* Nav rail */}
+          <div className="relative z-10">
+            <NavRail
+              active={activeSection}
+              onNavigate={setActiveSection}
+              pinned={pinRail}
+              onTogglePin={() => setPinRail((v) => !v)}
+              user={{ name: 'Stefan', email: 'stefan.babadac@devista.io', initials: 'SB' }}
             />
-            <motion.div
-              key="spotlight-panel"
-              initial={{ opacity: 0, scale: 0.95, y: -12 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: -12 }}
-              transition={{ duration: 0.18, ease: [0, 0, 0.2, 1] }}
-              className="fixed z-[201] left-1/2 top-[22%]"
-              style={{ width: 520, transform: 'translateX(-50%)', pointerEvents: 'all' }}
-            >
-              <SpotlightModal onClose={() => setSpotlightOpen(false)} />
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+          </div>
 
-      {/* Confirm action sheet (confirm + restricted tier) */}
-      <ConfirmActionSheet
-        request={confirmRequest}
-        onConfirm={handleConfirm}
-        onCancel={handleCancelConfirm}
-      />
+          {/* Main content area */}
+          <main className="flex-1 relative overflow-hidden z-10" id="main-content" tabIndex={-1}>
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={activeSection}
+                className="absolute inset-0"
+                initial={{ opacity: 0, filter: 'blur(2px)', y: 8 }}
+                animate={{ opacity: 1, filter: 'blur(0px)', y: 0 }}
+                exit={{ opacity: 0, filter: 'blur(2px)', y: -4 }}
+                transition={{
+                  duration: motionDuration.standard / 1000,
+                  ease: motionEasing.standard,
+                }}
+              >
+                <ErrorBoundary key={activeSection} fallbackTitle={`Error in ${activeSection}`}>
+                  <Suspense fallback={<ScreenFallback />}>
+                    <ActiveScreen />
+                  </Suspense>
+                </ErrorBoundary>
+              </motion.div>
+            </AnimatePresence>
+          </main>
 
-      {/* Ambient voice orb — always present when voice is enabled */}
-      <VoiceCaptureBridge />
-      <AuralithOrb />
+          {/* Context panel — per-screen right column */}
+          <div className="relative z-10 shrink-0">
+            <ContextPanel
+              route={activeSection}
+              open={contextPanelOpen}
+              onToggle={() => setContextPanelOpen((v) => !v)}
+            />
+          </div>
+        </div>
+        {/* end content row */}
 
-      {/* Toast notifications */}
-      <Toaster
-        position="bottom-right"
-        toastOptions={{
-          style: {
-            background: 'rgba(20,20,28,0.90)',
-            backdropFilter: 'blur(16px)',
-            border: '1px solid rgba(255,255,255,0.10)',
-            color: '#F4F4F8',
-            borderRadius: '10px',
-          },
-        }}
-      />
-    </div>
+        {/* Command palette */}
+        <CommandPalette
+          open={paletteOpen}
+          onClose={closePalette}
+          items={paletteItems}
+          prefill={palettePrefill}
+        />
+        <ShortcutsDialog open={shortcutsOpen} onClose={closeShortcuts} />
+        <NotificationCenter open={notificationCenterOpen} onClose={closeNotifications} />
+
+        {/* Spotlight — in-app modal with frosted backdrop */}
+        <AnimatePresence>
+          {spotlightOpen && (
+            <>
+              <motion.div
+                key="spotlight-backdrop"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.18 }}
+                className="fixed inset-0 z-[200]"
+                style={{
+                  background: 'rgba(0,0,0,0.45)',
+                  backdropFilter: 'blur(12px)',
+                  WebkitBackdropFilter: 'blur(12px)',
+                }}
+                onClick={() => setSpotlightOpen(false)}
+              />
+              <motion.div
+                key="spotlight-panel"
+                initial={{ opacity: 0, scale: 0.95, y: -12 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: -12 }}
+                transition={{ duration: 0.18, ease: [0, 0, 0.2, 1] }}
+                className="fixed z-[201] left-1/2 top-[22%]"
+                style={{ width: 520, transform: 'translateX(-50%)', pointerEvents: 'all' }}
+              >
+                <SpotlightModal onClose={() => setSpotlightOpen(false)} />
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
+
+        {/* Confirm action sheet (confirm + restricted tier) */}
+        <ConfirmActionSheet
+          request={confirmRequest}
+          onConfirm={handleConfirm}
+          onCancel={handleCancelConfirm}
+        />
+
+        {/* Transient confirm toast (confirm-transient tier — low-risk PC control) */}
+        <TransientConfirmToast />
+
+        {/* Ambient voice orb — always present when voice is enabled */}
+        <VoiceCaptureBridge />
+        <AuralithOrb />
+
+        {/* Toast notifications */}
+        <Toaster
+          position="bottom-right"
+          toastOptions={{
+            style: {
+              background: 'rgba(14,14,20,0.94)',
+              backdropFilter: 'blur(20px)',
+              WebkitBackdropFilter: 'blur(20px)',
+              border: '1px solid rgba(255,255,255,0.10)',
+              color: '#F4F4F8',
+              borderRadius: '12px',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            },
+          }}
+        />
+      </div>
+    </MotionConfig>
   )
 }
 

@@ -88,7 +88,9 @@ export class VoiceOrchestrator {
     // Wake word detection triggers a capture start (same as PTT)
     this.wakeWord.on('detected', () => {
       if (this.enabled && this.state === 'idle') {
-        void this.startCapture()
+        void this.startCapture().catch((err) =>
+          console.error('[voice] startCapture (wake-word) failed:', err),
+        )
       }
     })
 
@@ -98,7 +100,9 @@ export class VoiceOrchestrator {
         const sid = this.vadAutoStopSession
         this.vadAutoStopSession = null
         this.vad.stop()
-        void this.stopCapture(sid)
+        void this.stopCapture(sid).catch((err) =>
+          console.error('[voice] stopCapture (vad) failed:', err),
+        )
       }
       // In follow-up-listening mode the vadAutoStopSession is also set
     })
@@ -108,10 +112,14 @@ export class VoiceOrchestrator {
       if (this.state === 'speaking') {
         this.cancelSpeech()
         // Immediately start capturing for barge-in within the same conversation
-        void this.startCapture()
+        void this.startCapture().catch((err) =>
+          console.error('[voice] startCapture (barge-in) failed:', err),
+        )
       } else if (this.state === 'follow-up-listening') {
         // User started speaking → transition to listening
-        void this.startCapture()
+        void this.startCapture().catch((err) =>
+          console.error('[voice] startCapture (follow-up) failed:', err),
+        )
       }
     })
 
@@ -126,9 +134,14 @@ export class VoiceOrchestrator {
         if (this.state === 'speaking') {
           this.cancelSpeech()
         }
-        void this.handlePttStart()
+        void this.handlePttStart().catch((err) =>
+          console.error('[voice] handlePttStart failed:', err),
+        )
       },
-      onStop: () => void this.handlePttStop(),
+      onStop: () =>
+        void this.handlePttStop().catch((err) =>
+          console.error('[voice] handlePttStop failed:', err),
+        ),
       onStateChange: (s) => {
         if (s === 'idle') {
           this.setState('idle')

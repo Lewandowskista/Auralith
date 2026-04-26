@@ -103,7 +103,8 @@ export async function clusterTopic(topicId: string, opts: PipelineOpts): Promise
     })
     const headlines = groupItems.map((i) => `- ${i.title}`).join('\n')
 
-    let label = `${groupItems.length} related stories`
+    const firstTitle = groupItems[0]?.title ?? ''
+    let label = firstTitle.length > 80 ? firstTitle.slice(0, 77) + '…' : firstTitle
     if (ollamaClient && classifierModel) {
       const result = await runPrompt(
         CLUSTER_LABEL_PROMPT,
@@ -135,6 +136,21 @@ export async function fetchFullContent(opts: PipelineOpts): Promise<void> {
     // Small delay between external fetches to avoid hammering servers
     await new Promise((r) => setTimeout(r, 200))
   }
+}
+
+export async function fetchSingleItemFullContent(
+  itemId: string,
+  opts: Pick<PipelineOpts, 'repo'>,
+): Promise<{ fetched: boolean; fullContent: string | null }> {
+  const item = opts.repo.getItemById(itemId)
+  if (!item?.url) {
+    opts.repo.setFullContent(itemId, null)
+    return { fetched: false, fullContent: null }
+  }
+  const result = await fetchArticleContent(item.url, { timeoutMs: 8000 })
+  const content = result?.fullContent ?? null
+  opts.repo.setFullContent(itemId, content)
+  return { fetched: true, fullContent: content }
 }
 
 export async function runFullPipeline(opts: PipelineOpts): Promise<void> {

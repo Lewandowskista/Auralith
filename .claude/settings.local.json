@@ -19,7 +19,30 @@
       "Bash(git -C \"c:\\\\Users\\\\Stefan\\\\ProjectTank\" log --oneline -5)",
       "Bash(git -C \"c:\\\\Users\\\\Stefan\\\\ProjectTank\" remote -v)",
       "Bash(git -C \"c:\\\\Users\\\\Stefan\\\\ProjectTank\" remote add origin https://github.com/Lewandowskista/Auralith.git)",
-      "Bash(git -C \"c:\\\\Users\\\\Stefan\\\\ProjectTank\" add .claude .github .gitignore .husky .npmrc .pnpm-build-approvals.json .pnpmfile.cjs .prettierignore .prettierrc ARCHITECTURE.md CLAUDE.md CONTRIBUTING.md PROJECT_BRIEF.md README.md apps docs eslint.config.mjs package.json packages pnpm-lock.yaml pnpm-workspace.yaml resources tsconfig.base.json vitest.config.ts)"
+      "Bash(git -C \"c:\\\\Users\\\\Stefan\\\\ProjectTank\" add .claude .github .gitignore .husky .npmrc .pnpm-build-approvals.json .pnpmfile.cjs .prettierignore .prettierrc ARCHITECTURE.md CLAUDE.md CONTRIBUTING.md PROJECT_BRIEF.md README.md apps docs eslint.config.mjs package.json packages pnpm-lock.yaml pnpm-workspace.yaml resources tsconfig.base.json vitest.config.ts)",
+      "Bash(git -C \"c:\\\\Users\\\\Stefan\\\\ProjectTank\" add packages/core-ai/src/agent-loop.ts packages/core-db/src/repos/chunk-vec.repo.ts packages/core-db/src/repos/events.repo.ts packages/core-db/src/repos/routines.repo.ts packages/core-db/src/repos/suggestions.repo.ts packages/core-db/src/schema/knowledge.ts packages/core-db/src/schema/news.ts packages/core-routines/src/engine.ts packages/core-suggest/src/generators.ts packages/core-tools/src/executor.ts)",
+      "Bash(git -C 'c:\\\\Users\\\\Stefan\\\\ProjectTank' commit -m ' *)",
+      "Bash(git -C \"c:\\\\Users\\\\Stefan\\\\ProjectTank\" push -u origin master)",
+      "Bash(git credential *)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(k,':',v\\) for k,v in {**d.get\\('dependencies',{}\\), **d.get\\('devDependencies',{}\\)}.items\\(\\) if any\\(x in k.lower\\(\\) for x in ['mark','remark','micro','parse']\\)]\")",
+      "Bash(grep -rn \"rgba\\\\|#[0-9A-Fa-f]\\\\{3,6\\\\}\" /c/Users/Stefan/ProjectTank/apps/desktop/src/renderer/screens/home/HomeScreen.tsx)",
+      "Bash(pnpm -r typecheck)",
+      "Bash(pnpm --filter @auralith/core-db typecheck)",
+      "Bash(pnpm --filter @auralith/core-news typecheck)",
+      "Bash(pnpm --filter @auralith/core-domain typecheck)",
+      "Bash(find c:\\\\\\\\Users\\\\\\\\Stefan\\\\\\\\ProjectTank -type f \\\\\\( -name \"*.ts\" -o -name \"*.tsx\" \\\\\\))",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(grep -E \"\\\\.tsx$\")",
+      "Bash(ls c:\\\\\\\\Users\\\\\\\\Stefan\\\\\\\\ProjectTank/*.md)",
+      "Bash(ls c:\\\\\\\\Users\\\\\\\\Stefan\\\\\\\\ProjectTank/docs/*.md)",
+      "Bash(grep -i \"\\\\.md$\")",
+      "Bash(pnpm --filter=@auralith/desktop typecheck)",
+      "Bash(pnpm --filter=@auralith/desktop build)",
+      "Bash(git stash *)",
+      "Bash(pnpm --filter=@auralith/core-ai test -- --reporter=verbose)",
+      "Bash(pnpm --filter=@auralith/core-ai test)"
     ]
   }
 }

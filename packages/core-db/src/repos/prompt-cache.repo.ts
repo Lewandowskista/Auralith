@@ -34,9 +34,7 @@ export function createPromptCacheRepo(db: DbClient) {
     const now = new Date()
     // TTL is stored in ms; expires when createdAt + ttl < now.
     // Use raw comparison: created_at + ttl < now (both in ms)
-    db.$client.prepare(
-      `DELETE FROM prompts_cache WHERE (created_at + ttl) < ?`
-    ).run(now.getTime())
+    db.$client.prepare(`DELETE FROM prompts_cache WHERE (created_at + ttl) < ?`).run(now.getTime())
   }
 
   return { get, set, evictExpired }

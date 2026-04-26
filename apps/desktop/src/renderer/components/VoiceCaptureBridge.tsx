@@ -21,6 +21,7 @@ export function VoiceCaptureBridge(): ReactElement | null {
       if (runtimeRef.current?.sessionId === sessionId) return
       await stop()
 
+      let audioContext: AudioContext | null = null
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: {
@@ -30,7 +31,7 @@ export function VoiceCaptureBridge(): ReactElement | null {
             autoGainControl: true,
           },
         })
-        const audioContext = new AudioContext()
+        audioContext = new AudioContext()
         const source = audioContext.createMediaStreamSource(stream)
         const processor = audioContext.createScriptProcessor(4096, 1, 1)
         const gain = audioContext.createGain()
@@ -38,6 +39,7 @@ export function VoiceCaptureBridge(): ReactElement | null {
 
         processor.onaudioprocess = (event) => {
           const input = event.inputBuffer.getChannelData(0)
+          if (!audioContext) return
           const downsampled = downsampleFloat32(input, audioContext.sampleRate, 16_000)
           const pcm16 = floatToPcm16(downsampled)
           if (pcm16.length === 0) return
@@ -53,6 +55,8 @@ export function VoiceCaptureBridge(): ReactElement | null {
 
         runtimeRef.current = { sessionId, stream, audioContext, source, processor, gain }
       } catch (err) {
+        // Ensure AudioContext is released even if setup fails after it was created
+        if (audioContext) void audioContext.close().catch(() => undefined)
         const message = err instanceof Error ? err.message : 'Microphone capture failed'
         console.error('[voice-capture]', message)
         const isPermissionDenied =

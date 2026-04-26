@@ -58,14 +58,21 @@ export function setupIpcRouter(): void {
       const ms = Math.round(performance.now() - start)
       // Debounced batch-insert — skip very cheap ops to keep volume down
       if (ms >= 5) {
+        const safeLen = (v: unknown): number => {
+          try {
+            return Math.min(JSON.stringify(v).length, 100_000)
+          } catch {
+            return 0
+          }
+        }
         _obsRepo?.queueTrace({
           op,
           durationMs: ms,
           status: 'ok',
           errCode: null,
           ts: Date.now(),
-          paramsBytes: JSON.stringify(params).length,
-          resultBytes: JSON.stringify(data).length,
+          paramsBytes: safeLen(params),
+          resultBytes: safeLen(data),
         })
       }
       return { ok: true, data, requestId, traceId }
@@ -77,13 +84,20 @@ export function setupIpcRouter(): void {
           ? String((err as NodeJS.ErrnoException).code)
           : undefined
       console.error(`[IPC ${traceId}] ${op} → error (${ms}ms):`, err)
+      const safeLen = (v: unknown): number => {
+        try {
+          return Math.min(JSON.stringify(v).length, 100_000)
+        } catch {
+          return 0
+        }
+      }
       _obsRepo?.queueTrace({
         op,
         durationMs: ms,
         status: 'error',
         errCode: code ?? null,
         ts: Date.now(),
-        paramsBytes: JSON.stringify(params).length,
+        paramsBytes: safeLen(params),
         resultBytes: 0,
       })
       return { ok: false, error: { message, ...(code ? { code } : {}) }, requestId, traceId }

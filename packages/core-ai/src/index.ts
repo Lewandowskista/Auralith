@@ -40,11 +40,14 @@ export { RAG_SYSTEM_PROMPT, buildRagUserPrompt, CITATION_VALIDATE_V1 } from './p
 export { buildAssistantCapabilityContext } from './capabilities'
 export {
   runTurn,
+  runCodingTurn,
   type TurnMessage,
   type ToolManifestEntry,
   type TurnRunnerDeps,
   type TurnRunnerResult,
   type AppContextInjection,
+  type CodingTurnDeps,
+  type CodingTurnResult,
 } from './turn-runner'
 export {
   runAgentLoop,
@@ -148,6 +151,9 @@ export {
 } from './roles'
 
 export {
+  // Coding streaming path
+  CODING_SYSTEM_PROMPT,
+  buildCodingContextBlock,
   // RAG structured answer
   RAG_ANSWER_V1,
   RagAnswerOutputSchema,

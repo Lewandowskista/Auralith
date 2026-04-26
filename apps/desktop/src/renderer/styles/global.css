@@ -14,6 +14,7 @@
 *::after {
   box-sizing: border-box;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 html,
@@ -31,6 +32,12 @@ body,
   line-height: 1.55;
 }
 
+/* Text selection */
+::selection {
+  background: rgba(139, 92, 246, 0.28);
+  color: var(--color-text-primary);
+}
+
 /* Focus ring — 2px accent, 2px offset, visible on all surfaces */
 :focus-visible {
   outline: 2px solid var(--color-accent-low);
@@ -44,8 +51,8 @@ body,
 
 /* Scrollbar styling */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
@@ -53,18 +60,22 @@ body,
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--color-border-strong);
-  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.10);
+  border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.18);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* Firefox scrollbar */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--color-border-strong) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.10) transparent;
 }
 
 /* Reduced motion — honor OS setting */
@@ -78,19 +89,129 @@ body,
   }
 }
 
-/* Shimmer animation for image skeleton loading */
+/* ── Keyframe animations ─────────────────────────────────────────────────── */
+
+/* Shimmer for skeleton loading */
 @keyframes shimmer {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
 }
 
-/* Blinking text cursor shown at the end of streaming assistant messages */
+/* Blinking text cursor for streaming assistant messages */
 @keyframes cursor-blink {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0; }
 }
 
-/* Article body — scoped styles for full article HTML rendered in reader panel */
+/* Ambient pulse — for orbs and attention indicators */
+@keyframes ambient-pulse {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50%       { opacity: 1; transform: scale(1.04); }
+}
+
+/* Gradient shimmer — for skeleton loading states */
+@keyframes gradient-shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+/* Spin — used on loading indicators */
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ── Prose / markdown rendered content ──────────────────────────────────── */
+
+.prose-auralith {
+  color: var(--color-text-primary);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.prose-auralith p { margin: 0.6em 0; }
+.prose-auralith p:first-child { margin-top: 0; }
+.prose-auralith p:last-child { margin-bottom: 0; }
+
+.prose-auralith h1,
+.prose-auralith h2 {
+  font-size: 1em;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 1.1em 0 0.35em;
+}
+.prose-auralith h3 {
+  font-size: 0.92em;
+  font-weight: 600;
+  margin: 0.9em 0 0.3em;
+}
+.prose-auralith ul,
+.prose-auralith ol {
+  padding-left: 1.4em;
+  margin: 0.5em 0;
+}
+.prose-auralith li { margin: 0.2em 0; }
+
+.prose-auralith strong { color: var(--color-text-primary); font-weight: 600; }
+.prose-auralith em { color: var(--color-text-secondary); }
+
+.prose-auralith a {
+  color: var(--color-accent-mid);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(167,139,250,0.3);
+  transition: border-color 120ms;
+}
+.prose-auralith a:hover { border-color: rgba(167,139,250,0.7); }
+
+.prose-auralith code {
+  background: rgba(139, 92, 246, 0.12);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+  font-size: 0.84em;
+  font-family: var(--font-mono);
+  color: var(--color-accent-high);
+}
+
+.prose-auralith pre {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--color-border-hairline);
+  border-radius: 10px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-size: 0.84em;
+  margin: 0.75em 0;
+}
+.prose-auralith pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--color-text-secondary);
+}
+
+.prose-auralith blockquote {
+  border-left: 2px solid var(--color-accent-mid);
+  padding-left: 0.75em;
+  color: var(--color-text-tertiary);
+  font-style: italic;
+  margin: 0.75em 0;
+}
+
+.prose-auralith hr {
+  border: none;
+  border-top: 1px solid var(--color-border-hairline);
+  margin: 1em 0;
+}
+
+/* ── Article body — scoped for full HTML in reader panel ────────────────── */
+
+.article-body {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  line-height: 1.75;
+  font-family: var(--font-sans);
+}
+
 .article-body p { margin: 0.75em 0; }
 .article-body h1,
 .article-body h2 {
@@ -156,4 +277,52 @@ body,
 .article-body pre code {
   background: transparent;
   padding: 0;
+}
+
+/* ── Widget glass cards ──────────────────────────────────────────────────── */
+
+.widget-card {
+  border-radius: 16px;
+  border: 1px solid var(--color-border-hairline);
+  background: rgba(14, 14, 20, 0.60);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  transition: border-color 180ms, box-shadow 180ms;
+}
+
+.widget-card:hover {
+  border-color: var(--color-border-subtle);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+}
+
+/* ── Interactive row ─────────────────────────────────────────────────────── */
+
+.row-interactive {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 12px;
+  border: 1px solid var(--color-border-hairline);
+  background: rgba(20, 20, 28, 0.40);
+  padding: 10px 14px;
+  text-align: left;
+  transition: background 120ms, border-color 120ms;
+}
+.row-interactive:hover {
+  background: rgba(20, 20, 28, 0.65);
+  border-color: var(--color-border-subtle);
+}
+
+/* ── Skeleton shimmer ────────────────────────────────────────────────────── */
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.04) 0%,
+    rgba(255,255,255,0.07) 50%,
+    rgba(255,255,255,0.04) 100%
+  );
+  background-size: 400px 100%;
+  animation: gradient-shimmer 1.6s ease-in-out infinite;
 }

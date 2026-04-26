@@ -35,15 +35,38 @@ export function WidgetCard({
   return (
     <section
       className={cn(
-        'rounded-[24px] border border-white/[0.06] bg-[rgba(16,16,22,0.78)] p-5 shadow-[0_18px_60px_rgba(0,0,0,0.24)] backdrop-blur-xl',
+        'group relative rounded-2xl border p-5 transition-all duration-200',
         colSpan === 2 ? 'xl:col-span-2' : '',
         className,
       )}
+      style={{
+        background: 'rgba(14,14,20,0.72)',
+        backdropFilter: 'blur(24px)',
+        WebkitBackdropFilter: 'blur(24px)',
+        border: '1px solid rgba(255,255,255,0.07)',
+        boxShadow: '0 4px 24px rgba(0,0,0,0.28), 0 1px 0 rgba(255,255,255,0.04) inset',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.border = '1px solid rgba(255,255,255,0.11)'
+        e.currentTarget.style.boxShadow =
+          '0 8px 32px rgba(0,0,0,0.35), 0 1px 0 rgba(255,255,255,0.04) inset'
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.border = '1px solid rgba(255,255,255,0.07)'
+        e.currentTarget.style.boxShadow =
+          '0 4px 24px rgba(0,0,0,0.28), 0 1px 0 rgba(255,255,255,0.04) inset'
+      }}
     >
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold text-[#F4F4F8]">{title}</h3>
-          {subtitle && <p className="mt-1 text-xs text-[#6F6F80]">{subtitle}</p>}
+          <h3 className="text-[13px] font-semibold" style={{ color: '#F4F4F8' }}>
+            {title}
+          </h3>
+          {subtitle && (
+            <p className="mt-0.5 text-[11px]" style={{ color: '#6F6F80' }}>
+              {subtitle}
+            </p>
+          )}
         </div>
         {action}
       </div>

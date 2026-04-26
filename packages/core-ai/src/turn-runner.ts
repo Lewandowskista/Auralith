@@ -4,6 +4,7 @@ import { buildAssistantCapabilityContext } from './capabilities'
 import { buildAppIdentityBlock } from './app-capabilities'
 import { formatToon } from './prompt-format'
 import { resolveModelConfig } from './model-resolver'
+import { CODING_SYSTEM_PROMPT, buildCodingContextBlock } from './prompts/role-prompts'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -72,6 +73,13 @@ const DirectToolOutputSchema = z.object({
   params: z.record(z.string(), z.unknown()).default({}),
 })
 
+// Llama-style: {"action":"tool","tool":"<id>","parameters":{...}}
+const LlamaToolOutputSchema = z.object({
+  action: z.literal('tool'),
+  tool: z.string(),
+  parameters: z.record(z.string(), z.unknown()).optional().default({}),
+})
+
 function parseTurnOutput(raw: string, tools: ToolManifestEntry[]): TurnOutput | null {
   const cleaned = raw
     .replace(/^```(?:json)?\s*/i, '')
@@ -81,6 +89,15 @@ function parseTurnOutput(raw: string, tools: ToolManifestEntry[]): TurnOutput | 
 
   const structured = TurnOutputSchema.safeParse(obj)
   if (structured.success) return structured.data
+
+  // Handle llama's native tool-call format: {action:"tool", tool:"<id>", parameters:{...}}
+  const llamaTool = LlamaToolOutputSchema.safeParse(obj)
+  if (llamaTool.success) {
+    const toolId = llamaTool.data.tool
+    if (tools.some((tool) => tool.id === toolId)) {
+      return { type: 'tool', id: toolId, params: llamaTool.data.parameters }
+    }
+  }
 
   const directTool = DirectToolOutputSchema.safeParse(obj)
   if (!directTool.success) return null
@@ -108,18 +125,19 @@ function buildSystemPrompt(
   // TOON-like compact record table for tool catalog.
   // Saves ~40% tokens vs pretty-printed JSON for typical tool lists on small models.
   // Output is still strict JSON — TOON is only used for this input context.
-  const toolsSection = tools.length > 0
-    ? formatToon(
-        tools.map((t) => ({
-          id: t.id,
-          tier: t.tier,
-          description: t.description,
-          params: JSON.stringify(t.paramsSchema),
-        })),
-        ['id', 'tier', 'description', 'params'],
-        'tools',
-      )
-    : '(no tools available)'
+  const toolsSection =
+    tools.length > 0
+      ? formatToon(
+          tools.map((t) => ({
+            id: t.id,
+            tier: t.tier,
+            description: t.description,
+            params: JSON.stringify(t.paramsSchema),
+          })),
+          ['id', 'tier', 'description', 'params'],
+          'tools',
+        )
+      : '(no tools available)'
 
   const contextSection = ragContext
     ? `\n\nKnowledge context (use when relevant):\n${ragContext}\n`
@@ -132,10 +150,9 @@ function buildSystemPrompt(
   const capabilitiesSection = capabilityContext.trim() ? `\n\n${capabilityContext.trim()}\n` : ''
 
   // Inject pre-built app context from the broker (weather, news, activity, etc.)
-  const appContextSection =
-    appContext?.promptContext?.trim()
-      ? `\n\n${appContext.promptContext.trim()}\n`
-      : ''
+  const appContextSection = appContext?.promptContext?.trim()
+    ? `\n\n${appContext.promptContext.trim()}\n`
+    : ''
 
   const appIdentity = buildAppIdentityBlock()
 
@@ -165,7 +182,9 @@ Rules:
 - If the user's request is ambiguous, ask one focused clarifying question before proceeding.
 - When the user refers to "it", "that", or "the previous", look back in the conversation history to resolve the reference.
 
-${includeNewsRules ? `News briefing rules — MANDATORY (apply whenever answering any news question):
+${
+  includeNewsRules
+    ? `News briefing rules — MANDATORY (apply whenever answering any news question):
 CONTEXT CONTRACT: When news_items or news_articles are present in ## Auralith App Context, you MUST use them.
 You MUST cite at least one exact title from news_items/news_articles in every news response.
 You are NOT allowed to summarize news without citing at least one exact article title from the context.
@@ -182,7 +201,9 @@ Top stories:
 Prioritise by importance field (high first), then recency (latest published first).
 Do not invent, infer, or paraphrase article titles — copy them exactly from the context data.
 
-` : ''}- Reply with ONLY the JSON object — no prose, no code fences.`
+`
+    : ''
+}- Reply with ONLY the JSON object — no prose, no code fences.`
 }
 
 // ── Turn runner ───────────────────────────────────────────────────────────────
@@ -208,7 +229,8 @@ export async function runTurn(opts: {
   appContext?: AppContextInjection
   deps: TurnRunnerDeps
 }): Promise<TurnRunnerResult> {
-  const { userText, sessionId, history, tools, ragContext, personaOverride, appContext, deps } = opts
+  const { userText, sessionId, history, tools, ragContext, personaOverride, appContext, deps } =
+    opts
   const deadline = Date.now() + WALL_CLOCK_MS
   const { num_ctx } = resolveModelConfig(deps.chatRole ?? 'chat', { model: deps.chatModel })
 
@@ -230,20 +252,18 @@ export async function runTurn(opts: {
   const recentHistory = history.slice(-12)
   const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
-    ...recentHistory.map(
-      (m, idx): ChatMessage => {
-        const role = m.role === 'tool_result' ? 'user' : m.role
-        let content =
-          m.role === 'tool_result'
-            ? `Tool result for ${m.toolId ?? 'unknown'}: ${m.toolResultJson ?? '{}'}`
-            : m.content
-        // Truncate older turns (beyond the 4 most recent) to save context tokens
-        if (idx < recentHistory.length - 4 && content.length > 300) {
-          content = content.slice(0, 300) + '…'
-        }
-        return { role, content }
-      },
-    ),
+    ...recentHistory.map((m, idx): ChatMessage => {
+      const role = m.role === 'tool_result' ? 'user' : m.role
+      let content =
+        m.role === 'tool_result'
+          ? `Tool result for ${m.toolId ?? 'unknown'}: ${m.toolResultJson ?? '{}'}`
+          : m.content
+      // Truncate older turns (beyond the 4 most recent) to save context tokens
+      if (idx < recentHistory.length - 4 && content.length > 300) {
+        content = content.slice(0, 300) + '…'
+      }
+      return { role, content }
+    }),
     { role: 'user', content: userText },
   ]
 
@@ -268,7 +288,8 @@ export async function runTurn(opts: {
     let speakEmitCursor = 0
 
     // Prefix we expect for a speak response — used to detect the inner text boundary.
-    const SPEAK_PREFIX = '"text":"'
+    // Matches both compact ("text":"") and spaced ("text": "") JSON formats.
+    const SPEAK_PREFIX_REGEX = /"text"\s*:\s*"/
 
     try {
       for await (const token of deps.chatClient.stream({
@@ -287,29 +308,42 @@ export async function runTurn(opts: {
         // skipping the JSON scaffold entirely. speakTextDone is set once the
         // closing quote of the JSON string value has been reached.
         if (!speakTextDone) {
-          const prefixIdx = raw.indexOf(SPEAK_PREFIX)
-          if (prefixIdx !== -1) {
+          const prefixMatch = SPEAK_PREFIX_REGEX.exec(raw)
+          if (prefixMatch) {
+            const prefixIdx = prefixMatch.index
             // Speak response detected — emit newly arrived inner text characters.
-            const textStart = prefixIdx + SPEAK_PREFIX.length
+            const textStart = prefixIdx + prefixMatch[0].length
             // Walk from our cursor to the current end, stopping at the closing
             // quote that terminates the JSON string value.
             let i = textStart + speakEmitCursor
             while (i < raw.length) {
               const ch = raw[i]
               // Stop at the unescaped closing quote of the JSON string value.
-              if (ch === '"' && raw[i - 1] !== '\\') {
-                speakTextDone = true
-                break
+              // Count consecutive backslashes before this quote: even count means
+              // the quote is a real boundary; odd count means it is escaped.
+              if (ch === '"') {
+                let escCount = 0
+                while (i - escCount - 1 >= textStart && raw[i - escCount - 1] === '\\') escCount++
+                if (escCount % 2 === 0) {
+                  speakTextDone = true
+                  break
+                }
               }
               // Unescape basic JSON sequences before forwarding.
               if (ch === '\\' && i + 1 < raw.length) {
                 const next = raw[i + 1]
                 const unescaped =
-                  next === 'n' ? '\n' :
-                  next === 't' ? '\t' :
-                  next === 'r' ? '\r' :
-                  next === '"' ? '"' :
-                  next === '\\' ? '\\' : ch + next
+                  next === 'n'
+                    ? '\n'
+                    : next === 't'
+                      ? '\t'
+                      : next === 'r'
+                        ? '\r'
+                        : next === '"'
+                          ? '"'
+                          : next === '\\'
+                            ? '\\'
+                            : ch + next
                 deps.onToken(unescaped)
                 speakEmitCursor += 2
                 i += 2
@@ -435,4 +469,73 @@ export async function runTurn(opts: {
   }
 
   return { finalText, toolsInvoked, sessionId }
+}
+
+// ── Coding turn ───────────────────────────────────────────────────────────────
+// Streams Markdown directly from qwen2.5-coder without the JSON speak/tool
+// envelope used by runTurn. Tokens are forwarded verbatim to the renderer,
+// giving real first-token latency and native Markdown rendering of code blocks.
+
+export type CodingTurnDeps = {
+  codingClient: OllamaClient
+  codingModel: string
+  onToken: (token: string) => void
+  saveTurn?: (turn: { sessionId: string; role: string; content: string }) => void
+}
+
+export type CodingTurnResult = {
+  finalText: string
+  sessionId: string
+}
+
+export async function runCodingTurn(opts: {
+  userText: string
+  sessionId: string
+  history: TurnMessage[]
+  ragContext: string
+  deps: CodingTurnDeps
+}): Promise<CodingTurnResult> {
+  const { userText, sessionId, history, ragContext, deps } = opts
+  const { num_ctx } = resolveModelConfig('coding', { model: deps.codingModel })
+
+  const contextBlock = buildCodingContextBlock(ragContext)
+  const systemContent = `${CODING_SYSTEM_PROMPT}${contextBlock}`
+
+  // Include recent conversation history so multi-turn coding works naturally
+  const recentHistory = history.slice(-10)
+  const messages: ChatMessage[] = [
+    { role: 'system', content: systemContent },
+    ...recentHistory.map(
+      (m): ChatMessage => ({
+        role: m.role === 'tool_result' ? 'user' : m.role,
+        content: m.content,
+      }),
+    ),
+    { role: 'user', content: userText },
+  ]
+
+  deps.saveTurn?.({ sessionId, role: 'user', content: userText })
+
+  let finalText = ''
+
+  try {
+    for await (const token of deps.codingClient.stream({
+      model: deps.codingModel,
+      messages,
+      maxTokens: 2048,
+      temperature: 0.2,
+      num_ctx,
+    })) {
+      finalText += token
+      deps.onToken(token)
+    }
+  } catch (err) {
+    const errText = err instanceof Error ? err.message : 'Coding model unavailable'
+    deps.onToken(errText)
+    deps.saveTurn?.({ sessionId, role: 'assistant', content: errText })
+    return { finalText: errText, sessionId }
+  }
+
+  deps.saveTurn?.({ sessionId, role: 'assistant', content: finalText })
+  return { finalText, sessionId }
 }

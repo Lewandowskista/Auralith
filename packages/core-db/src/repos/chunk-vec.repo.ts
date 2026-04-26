@@ -77,5 +77,22 @@ export function createChunkVecRepo(sqlite: Database) {
     return rows.map((r) => ({ chunkId: r.chunk_id, distance: r.distance }))
   }
 
-  return { upsert, remove, removeByDoc, search }
+  function getByIds(chunkIds: string[]): Array<{ chunkId: string; embedding: number[] }> {
+    if (chunkIds.length === 0) return []
+    const placeholders = chunkIds.map(() => '?').join(',')
+    const rows = sqlite
+      .prepare<
+        string[]
+      >(`SELECT chunk_id, embedding FROM chunk_vec WHERE chunk_id IN (${placeholders})`)
+      .all(...chunkIds) as Array<{ chunk_id: string; embedding: Buffer }>
+    return rows.map((r) => {
+      const floats: number[] = []
+      for (let i = 0; i < r.embedding.length; i += 4) {
+        floats.push(r.embedding.readFloatLE(i))
+      }
+      return { chunkId: r.chunk_id, embedding: floats }
+    })
+  }
+
+  return { upsert, remove, removeByDoc, search, getByIds }
 }

@@ -40,9 +40,7 @@ export function createLlmReranker(client: OllamaClient, model: string): Reranker
     async score(query, passages) {
       if (passages.length === 0) return []
 
-      const passList = passages
-        .map((p, i) => `[${i + 1}] ${p.slice(0, 300)}`)
-        .join('\n\n')
+      const passList = passages.map((p, i) => `[${i + 1}] ${p.slice(0, 300)}`).join('\n\n')
 
       const contract = buildRerankContract(passages.length)
       const result = await runPrompt(

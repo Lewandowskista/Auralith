@@ -11,7 +11,7 @@ import {
   AssistantDeleteSessionParamsSchema,
 } from '@auralith/core-domain'
 import type { OllamaClient, ModelRouter } from '@auralith/core-ai'
-import { runTurn, getAiQueue } from '@auralith/core-ai'
+import { runTurn, runCodingTurn, getAiQueue, runPrompt, ROUTE_CLASSIFY_V1 } from '@auralith/core-ai'
 import {
   hybridSearch,
   assembleCitations,
@@ -28,6 +28,8 @@ type AssistantDeps = {
   sqlite: Database.Database
   chatClient: OllamaClient
   chatModel: string
+  codingClient: OllamaClient
+  codingModel: string
   embedClient: OllamaClient
   embedModel: string
   executorDeps: ExecutorDeps
@@ -376,9 +378,20 @@ export function registerAssistantHandlers(): void {
       messageId: clientMessageId,
       sessionId: clientSessionId,
       spaceId,
+      model: modelOverride,
     } = AssistantSendParamsSchema.parse(params)
-    const { bundle, sqlite, chatClient, chatModel, embedClient, embedModel, executorDeps } =
-      getDeps()
+    const {
+      bundle,
+      sqlite,
+      chatClient,
+      chatModel: defaultChatModel,
+      codingClient,
+      codingModel,
+      embedClient,
+      embedModel,
+      executorDeps,
+    } = getDeps()
+    const chatModel = modelOverride ?? defaultChatModel
     const settings = createSettingsRepo(bundle.db)
     const personaOverride = settings.get('assistant.personaOverride', z.string())
     const messageId = clientMessageId ?? randomUUID()
@@ -454,9 +467,86 @@ export function registerAssistantHandlers(): void {
     }
     sendQueue?.beginForegroundAiTask()
 
-    // Build app context snapshot (weather, news, activity, etc.) for this message.
-    // Runs concurrently with the queue wait — failures are silently ignored.
-    const routeIntent = settings.get('appContext.defaultIntent', z.string()) ?? 'chat'
+    // Classify intent with the richer ROUTE_CLASSIFY_V1 (8 labels including 'coding').
+    // Falls back to 'chat' if classification fails so the turn always proceeds.
+    let routeIntent = settings.get('appContext.defaultIntent', z.string()) ?? 'chat'
+    let isCodingTurn = false
+    try {
+      const { router: intentRouter } = getDeps()
+      if (intentRouter) {
+        const classifierModel = intentRouter.modelFor('classifier')
+        const classifyResult = await runPrompt(
+          ROUTE_CLASSIFY_V1,
+          { message },
+          embedClient,
+          classifierModel,
+        )
+        if (classifyResult.ok) {
+          routeIntent = classifyResult.data.intent
+          isCodingTurn = classifyResult.data.intent === 'coding'
+        }
+      }
+    } catch {
+      // Intent classification is best-effort — fall back to stored default
+    }
+
+    // Coding turn — stream markdown directly from qwen2.5-coder, skip the JSON envelope.
+    if (isCodingTurn) {
+      try {
+        await runCodingTurn({
+          userText: message,
+          sessionId,
+          history,
+          ragContext,
+          deps: {
+            codingClient,
+            codingModel,
+            onToken: (token) => {
+              if (!abortFlags.get(messageId)) {
+                win?.webContents.send('assistant:token', { messageId, token })
+              }
+            },
+            saveTurn: (turn) => {
+              pushCachedTurn(sessionId, { role: turn.role, content: turn.content })
+              try {
+                sqlite
+                  .prepare(
+                    'INSERT INTO conversation_turns(id,session_id,role,content,tool_id,tool_params_json,tool_result_json,created_at) VALUES(?,?,?,?,?,?,?,?)',
+                  )
+                  .run(
+                    randomUUID(),
+                    sessionId,
+                    turn.role,
+                    turn.content,
+                    null,
+                    null,
+                    null,
+                    Date.now(),
+                  )
+                sqlite
+                  .prepare('INSERT OR IGNORE INTO sessions(id, started_at) VALUES(?, ?)')
+                  .run(sessionId, Date.now())
+              } catch {
+                /* DB may not be migrated yet */
+              }
+            },
+          },
+        })
+        if (!abortFlags.get(messageId)) {
+          win?.webContents.send('assistant:done', { messageId, citations: [], toolsInvoked: [] })
+        }
+      } catch (err) {
+        win?.webContents.send('assistant:error', {
+          messageId,
+          error: err instanceof Error ? err.message : 'Coding turn failed',
+        })
+      } finally {
+        abortFlags.delete(messageId)
+        sendQueue?.endForegroundAiTask()
+      }
+      return { messageId, sessionId }
+    }
+
     let appContext:
       | { promptContext: string; capabilitiesIncluded: string[]; hadCloudRestrictions: boolean }
       | undefined
@@ -621,6 +711,18 @@ export function registerAssistantHandlers(): void {
       return { deleted: true }
     } catch {
       return { deleted: false }
+    }
+  })
+
+  registerHandler('assistant.deleteAllSessions', async () => {
+    const { sqlite } = getDeps()
+    try {
+      const info = sqlite.prepare('DELETE FROM conversation_turns').run()
+      sqlite.prepare('DELETE FROM sessions').run()
+      sessionHistories.clear()
+      return { deleted: info.changes }
+    } catch {
+      return { deleted: 0 }
     }
   })
 }

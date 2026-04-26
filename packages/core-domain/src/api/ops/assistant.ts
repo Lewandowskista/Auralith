@@ -5,6 +5,8 @@ export const AssistantSendParamsSchema = z.object({
   messageId: z.string().optional(),
   sessionId: z.string().optional(),
   spaceId: z.string().optional(),
+  /** Override the chat model for this turn. Falls back to the configured chat model. */
+  model: z.string().optional(),
 })
 export const AssistantSendResultSchema = z.object({
   messageId: z.string(),
@@ -53,6 +55,9 @@ export const AssistantGetSessionResultSchema = z.object({
 
 export const AssistantDeleteSessionParamsSchema = z.object({ sessionId: z.string() })
 export const AssistantDeleteSessionResultSchema = z.object({ deleted: z.boolean() })
+
+export const AssistantDeleteAllSessionsParamsSchema = z.object({})
+export const AssistantDeleteAllSessionsResultSchema = z.object({ deleted: z.number() })
 
 export const AssistantListSessionsParamsSchema = z.object({
   limit: z.number().int().positive().default(20),

@@ -1,4 +1,13 @@
-import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, session } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  globalShortcut,
+  Tray,
+  Menu,
+  nativeImage,
+  session,
+} from 'electron'
 import { mkdirSync } from 'fs'
 import { join, resolve } from 'path'
 import Database from 'better-sqlite3'
@@ -81,7 +90,12 @@ import { registerAgentHandlers, initAgentDeps } from './ipc/handlers/agent.handl
 import { registerGraphHandlers, initGraphDeps } from './ipc/handlers/graph.handler'
 import { initObsDeps, registerObservabilityHandlers } from './ipc/handlers/observability.handler'
 import { setObservabilityRepo } from './ipc/router'
-import { setupConfirmationChannel, makeExecutorDeps } from './tools/confirmation'
+import {
+  setupConfirmationChannel,
+  makeExecutorDeps,
+  loadAllowListCache,
+} from './tools/confirmation'
+import { initPcControlDeps, registerPcControlHandlers } from './ipc/handlers/pccontrol.handler'
 import { FileWatcher } from './watcher/file-watcher'
 import { initAppContextBroker } from './ai/app-context-setup'
 import { SessionJob } from './watcher/session-job'
@@ -246,7 +260,17 @@ function registerGlobalShortcuts(): void {
 
 app.whenReady().then(() => {
   const dataDir = join(app.getPath('userData'), 'data')
-  const bundle = initDb({ dataDir })
+  let bundle: ReturnType<typeof initDb>
+  try {
+    bundle = initDb({ dataDir })
+  } catch (err) {
+    dialog.showErrorBox(
+      'Auralith — Startup Error',
+      `Database failed to initialize:\n${err instanceof Error ? err.message : String(err)}\n\nTry deleting the data folder at: ${dataDir}`,
+    )
+    app.quit()
+    return
+  }
 
   const crashStatsRepo = createCrashStatsRepo(bundle.db)
   setCrashStatRecorder((level, module, message) => crashStatsRepo.record(level, module, message))
@@ -267,9 +291,25 @@ app.whenReady().then(() => {
 
   const ollamaClient = new OllamaClient({ baseUrl })
 
-  // Model roles are hardcoded — no per-role overrides from settings.
-  // Role → model assignments live in packages/core-ai/src/router.ts (balanced preset).
-  initModelRouter(ollamaClient)
+  // Load saved per-role model assignments from settings (persisted by ollama.applyPreset /
+  // ollama.saveModelRouting). Falls back to balanced-preset defaults for any missing role.
+  const savedRouting: Partial<Record<string, string>> = {}
+  for (const role of [
+    'classifier',
+    'chat',
+    'summarize',
+    'extract',
+    'agent',
+    'embed',
+    'rag',
+    'news_synthesis',
+    'tool_call',
+    'coding',
+  ] as const) {
+    const saved = settings.get(`ollama.modelRouting.${role}`, z.string())
+    if (saved) savedRouting[role] = saved
+  }
+  initModelRouter(ollamaClient, savedRouting as Parameters<typeof initModelRouter>[1])
 
   // Single shared AI queue — one foreground + one background slot.
   // Background slots pause while the user is actively chatting (foreground).
@@ -315,7 +355,8 @@ app.whenReady().then(() => {
   retentionJob.start()
 
   const auditRepo = createAuditRepo(bundle.db)
-  const executorDeps = makeExecutorDeps(auditRepo)
+  loadAllowListCache(sqlite)
+  const executorDeps = makeExecutorDeps(auditRepo, sqlite)
 
   // All feature deps read resolved model names from the router — the single
   // source of truth for which model serves each role.
@@ -326,13 +367,22 @@ app.whenReady().then(() => {
   const resolvedClassifierModel = router.modelFor('classifier')
   const resolvedSummarizeModel = router.modelFor('summarize')
   const resolvedExtractModel = router.modelFor('extract')
+  const resolvedCodingModel = router.modelFor('coding')
 
-  initBrainDeps({ bundle, sqlite, embedClient: ollamaClient, embedModel: resolvedEmbedModel })
+  initBrainDeps({
+    bundle,
+    sqlite,
+    embedClient: ollamaClient,
+    embedModel: resolvedEmbedModel,
+    router,
+  })
   initAssistantDeps({
     bundle,
     sqlite,
     chatClient: ollamaClient,
     chatModel: resolvedChatModel,
+    codingClient: ollamaClient,
+    codingModel: resolvedCodingModel,
     embedClient: ollamaClient,
     embedModel: resolvedEmbedModel,
     executorDeps,
@@ -494,6 +544,8 @@ app.whenReady().then(() => {
   registerVoiceHandlers()
   registerToolsHandlers()
   registerRoutinesHandlers()
+  initPcControlDeps(sqlite)
+  registerPcControlHandlers()
   registerOllamaHandlers(bundle)
   initIngestDeps({ bundle, sqlite })
   registerIngestHandlers()
