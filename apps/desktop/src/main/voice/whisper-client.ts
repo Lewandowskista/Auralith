@@ -163,6 +163,15 @@ export class WhisperClient {
     }
   }
 
+  /**
+   * Re-enables STT after a crash-induced disable.
+   * Resets the crash counter so the worker gets a fresh window.
+   */
+  reenable(): void {
+    this.disabled = false
+    this.crashTimes = []
+  }
+
   ensureRunning(): void {
     if (this.disabled) throw new Error('Whisper is disabled due to repeated crashes')
     if (!this.proc) {

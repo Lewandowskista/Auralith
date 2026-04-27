@@ -108,7 +108,7 @@ export const ToolCallOutputSchema = z.object({
   /** Arguments for the tool call. */
   args: z.record(z.string(), z.unknown()),
   /** Message to show the user (clarification, confirmation prompt, or final answer). */
-  message: z.string(),
+  message: z.string().max(800),
   /** Must be true for any tool with tier 'confirm' or 'restricted'. */
   requires_confirmation: z.boolean(),
 })
@@ -314,8 +314,11 @@ export const ROUTE_CLASSIFY_V1: PromptContract<RouteClassifyOutput> = {
     'If ambiguous, set requires_clarification:true and provide one focused clarifying_question.',
     'reason: one sentence max explaining the classification.',
   ].join('\n'),
-  userTemplate: ({ message }) =>
-    `Message: "${(message ?? '').slice(0, 800)}"\n\nJSON: {"intent":"...","confidence":0.0,"requires_clarification":false,"clarifying_question":null,"risk":"low","reason":"..."}`,
+  userTemplate: ({ message }) => {
+    const raw = message ?? ''
+    const truncated = raw.length > 800 ? raw.slice(0, 400) + ' … ' + raw.slice(-400) : raw
+    return `Message: "${truncated}"\n\nJSON: {"intent":"...","confidence":0.0,"requires_clarification":false,"clarifying_question":null,"risk":"low","reason":"..."}`
+  },
   outputSchema: RouteClassifyOutputSchema,
   maxTokens: 120,
   temperature: 0,

@@ -50,10 +50,22 @@ export async function rewriteQuery(
   if (words.length < 4 && /["']/.test(query)) return []
 
   try {
-    const raceResult = await Promise.race([
-      runPrompt(QUERY_REWRITE_CONTRACT, { query }, client, model),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
-    ])
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), timeoutMs)
+
+    let raceResult: Awaited<ReturnType<typeof runPrompt>> | null = null
+    try {
+      raceResult = await runPrompt(
+        QUERY_REWRITE_CONTRACT,
+        { query },
+        client,
+        model,
+        undefined,
+        ac.signal,
+      )
+    } finally {
+      clearTimeout(timer)
+    }
 
     if (!raceResult || !raceResult.ok) return []
 

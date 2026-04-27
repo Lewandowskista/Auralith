@@ -287,6 +287,8 @@ export async function runAgentLoop(
   // ── 2. Execution loop ────────────────────────────────────────────────────────
   let totalStepsRun = 0
   let lastStepFailed = false
+  let consecutiveReflectionFailures = 0
+  const MAX_CONSECUTIVE_REFLECTION_FAILURES = 3
 
   while (state.currentStepIndex < plan.steps.length && totalStepsRun < maxSteps) {
     if (Date.now() > deadline) {
@@ -381,8 +383,20 @@ export async function runAgentLoop(
             )
           }
         }
-      } catch {
-        // Reflection failed — continue with original plan
+
+        consecutiveReflectionFailures = 0
+      } catch (err) {
+        consecutiveReflectionFailures++
+        console.warn(
+          `[agent-loop] reflection failed (${consecutiveReflectionFailures}/${MAX_CONSECUTIVE_REFLECTION_FAILURES}):`,
+          err instanceof Error ? err.message : String(err),
+        )
+        if (consecutiveReflectionFailures >= MAX_CONSECUTIVE_REFLECTION_FAILURES) {
+          state.status = 'failed'
+          state.error = `Reflector failed ${MAX_CONSECUTIVE_REFLECTION_FAILURES} times consecutively`
+          deps.onStateUpdate({ ...state })
+          return state
+        }
       }
 
       state.status = 'running'

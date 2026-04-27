@@ -19,6 +19,8 @@ export type GenerateOpts = {
   /** Ollama context window size — controls VRAM usage. Clamped by resolveModelConfig. */
   num_ctx?: number
   stream?: false
+  /** Optional AbortSignal — when aborted the fetch is cancelled immediately. */
+  signal?: AbortSignal
 }
 
 export type EmbedOpts = {
@@ -73,6 +75,7 @@ export class OllamaClient {
     const res = await this.fetchJson(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       body: JSON.stringify(body),
+      ...(opts.signal ? { signal: opts.signal } : {}),
     })
 
     const content = (res as { message?: { content?: string } }).message?.content

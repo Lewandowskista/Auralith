@@ -34,7 +34,6 @@ export {
 } from './runtime'
 export { createPromptCache, type PromptCacheDb, type PromptCacheRow } from './prompt-cache'
 export { OllamaStatusMonitor, type OllamaStatus } from './ollama-status'
-export { INTENT_CLASSIFY_V1, type IntentResult } from './prompts/intent-classify'
 export { SESSION_LABEL_V1, type SessionLabelResult } from './prompts/session-label'
 export { RAG_SYSTEM_PROMPT, buildRagUserPrompt, CITATION_VALIDATE_V1 } from './prompts/rag-answer'
 export { buildAssistantCapabilityContext } from './capabilities'
@@ -177,7 +176,6 @@ export {
   ExtractGenericOutputSchema,
   buildExtractInputBlock,
   type ExtractGenericOutput,
-  // Full-routing classifier (superset of INTENT_CLASSIFY_V1)
   ROUTE_CLASSIFY_V1,
   RouteClassifyOutputSchema,
   type RouteClassifyOutput,

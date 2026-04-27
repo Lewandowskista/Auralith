@@ -103,7 +103,21 @@ function parseTurnOutput(raw: string, tools: ToolManifestEntry[]): TurnOutput | 
   if (!directTool.success) return null
 
   const toolId = directTool.data.type
-  if (!tools.some((tool) => tool.id === toolId)) return null
+  const matchedTool = tools.find((tool) => tool.id === toolId)
+  if (!matchedTool) return null
+
+  // Warn: this fallback path means the model skipped both structured formats.
+  // A confirm/restricted tool reached via this path would bypass tier-gating intent,
+  // so we block those tiers here as a safety rail.
+  console.warn(
+    `[turn-runner] DirectToolOutput fallback fired for tool "${toolId}" — model skipped structured output format`,
+  )
+  if (matchedTool.tier === 'confirm' || matchedTool.tier === 'restricted') {
+    console.warn(
+      `[turn-runner] Blocking ${matchedTool.tier}-tier tool "${toolId}" reached via DirectToolOutput fallback`,
+    )
+    return null
+  }
 
   return {
     type: 'tool',

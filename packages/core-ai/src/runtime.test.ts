@@ -81,3 +81,70 @@ describe('runPrompt — JSON reliability tracking', () => {
     expect(getJsonReliabilityStats()).toHaveLength(0)
   })
 })
+
+describe('runPrompt — retry / repair path', () => {
+  beforeEach(() => resetJsonReliabilityStats())
+
+  it('succeeds on retry when first attempt returns invalid JSON', async () => {
+    const result = await runPrompt(
+      contract,
+      { input: 'retry-test' },
+      fakeClient(['not-json', '{"label":"repaired"}']),
+      'repair-model:3b',
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('expected ok')
+    expect(result.data.label).toBe('repaired')
+  })
+
+  it('increments repairedJson when retry succeeds after first failure', async () => {
+    await runPrompt(
+      contract,
+      { input: 'retry-test' },
+      fakeClient(['not-json', '{"label":"repaired"}']),
+      'repair-model:3b',
+    )
+    const stats = getJsonReliabilityStats()
+    const stat = stats.find((s) => s.model === 'repair-model:3b')
+    expect(stat?.repairedJson).toBe(1)
+  })
+
+  it('does not increment repairedJson when first attempt succeeds', async () => {
+    await runPrompt(
+      contract,
+      { input: 'ok-test' },
+      fakeClient(['{"label":"ok"}']),
+      'repair-model:3b',
+    )
+    const stats = getJsonReliabilityStats()
+    const stat = stats.find((s) => s.model === 'repair-model:3b')
+    expect(stat?.repairedJson).toBe(0)
+  })
+
+  it('returns ok:false when both attempts fail', async () => {
+    const result = await runPrompt(
+      contract,
+      { input: 'fail-test' },
+      fakeClient(['not-json', 'also-not-json']),
+      'repair-model:3b',
+    )
+    expect(result.ok).toBe(false)
+    const stats = getJsonReliabilityStats()
+    const stat = stats.find((s) => s.model === 'repair-model:3b')
+    expect(stat?.repairedJson).toBe(0)
+  })
+
+  it('succeeds on retry when first attempt passes but schema validation fails', async () => {
+    const result = await runPrompt(
+      contract,
+      { input: 'schema-retry' },
+      fakeClient(['{"wrong_key":1}', '{"label":"fixed"}']),
+      'repair-model:3b',
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('expected ok')
+    expect(result.data.label).toBe('fixed')
+    const stat = getJsonReliabilityStats().find((s) => s.model === 'repair-model:3b')
+    expect(stat?.repairedJson).toBe(1)
+  })
+})

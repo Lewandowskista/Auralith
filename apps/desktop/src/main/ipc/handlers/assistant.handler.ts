@@ -417,9 +417,7 @@ export function registerAssistantHandlers(): void {
           : []
 
       const reranker =
-        useReranker && router
-          ? createLlmReranker(embedClient, router.modelFor('classifier'))
-          : undefined
+        useReranker && router ? createLlmReranker(embedClient, router.modelFor('rag')) : undefined
 
       const hits = await hybridSearch(
         {
@@ -441,7 +439,7 @@ export function registerAssistantHandlers(): void {
       citations = assembled.citations
       if (assembled.chunks.length > 0) {
         ragContext = assembled.chunks
-          .map((chunk) => `[${chunk.n}] (${chunk.path})\n${chunk.text}`)
+          .map((chunk) => `[^${chunk.n}] (${chunk.path})\n${chunk.text}`)
           .join('\n\n---\n\n')
       }
     } catch {
@@ -459,55 +457,171 @@ export function registerAssistantHandlers(): void {
       ...(turn.toolResultJson !== undefined ? { toolResultJson: turn.toolResultJson } : {}),
     }))
 
+    // Serialise through the foreground AI slot so concurrent assistant.send calls
+    // don't run two Ollama streams simultaneously and contend for VRAM.
     let sendQueue = null as ReturnType<typeof getAiQueue> | null
     try {
       sendQueue = getAiQueue()
     } catch {
-      /* queue not initialized */
-    }
-    sendQueue?.beginForegroundAiTask()
-
-    // Classify intent with the richer ROUTE_CLASSIFY_V1 (8 labels including 'coding').
-    // Falls back to 'chat' if classification fails so the turn always proceeds.
-    let routeIntent = settings.get('appContext.defaultIntent', z.string()) ?? 'chat'
-    let isCodingTurn = false
-    try {
-      const { router: intentRouter } = getDeps()
-      if (intentRouter) {
-        const classifierModel = intentRouter.modelFor('classifier')
-        const classifyResult = await runPrompt(
-          ROUTE_CLASSIFY_V1,
-          { message },
-          embedClient,
-          classifierModel,
-        )
-        if (classifyResult.ok) {
-          routeIntent = classifyResult.data.intent
-          isCodingTurn = classifyResult.data.intent === 'coding'
-        }
-      }
-    } catch {
-      // Intent classification is best-effort — fall back to stored default
+      /* queue not initialized — proceed without serialisation */
     }
 
-    // Coding turn — stream markdown directly from qwen2.5-coder, skip the JSON envelope.
-    if (isCodingTurn) {
+    const runQueued = async (): Promise<{ messageId: string; sessionId: string }> => {
+      // Classify intent with the richer ROUTE_CLASSIFY_V1 (8 labels including 'coding').
+      // Falls back to 'chat' if classification fails so the turn always proceeds.
+      let routeIntent = settings.get('appContext.defaultIntent', z.string()) ?? 'chat'
+      let isCodingTurn = false
       try {
-        await runCodingTurn({
+        const { router: intentRouter } = getDeps()
+        if (intentRouter) {
+          const classifierModel = intentRouter.modelFor('classifier')
+          const classifyResult = await runPrompt(
+            ROUTE_CLASSIFY_V1,
+            { message },
+            embedClient,
+            classifierModel,
+          )
+          if (classifyResult.ok) {
+            routeIntent = classifyResult.data.intent
+            isCodingTurn = classifyResult.data.intent === 'coding'
+          }
+        }
+      } catch {
+        // Intent classification is best-effort — fall back to stored default
+      }
+
+      // Coding turn — stream markdown directly from qwen2.5-coder, skip the JSON envelope.
+      if (isCodingTurn) {
+        try {
+          await runCodingTurn({
+            userText: message,
+            sessionId,
+            history,
+            ragContext,
+            deps: {
+              codingClient,
+              codingModel,
+              onToken: (token) => {
+                if (!abortFlags.get(messageId)) {
+                  win?.webContents.send('assistant:token', { messageId, token })
+                }
+              },
+              saveTurn: (turn) => {
+                pushCachedTurn(sessionId, { role: turn.role, content: turn.content })
+                try {
+                  sqlite
+                    .prepare(
+                      'INSERT INTO conversation_turns(id,session_id,role,content,tool_id,tool_params_json,tool_result_json,created_at) VALUES(?,?,?,?,?,?,?,?)',
+                    )
+                    .run(
+                      randomUUID(),
+                      sessionId,
+                      turn.role,
+                      turn.content,
+                      null,
+                      null,
+                      null,
+                      Date.now(),
+                    )
+                  sqlite
+                    .prepare('INSERT OR IGNORE INTO sessions(id, started_at) VALUES(?, ?)')
+                    .run(sessionId, Date.now())
+                } catch {
+                  /* DB may not be migrated yet */
+                }
+              },
+            },
+          })
+          if (!abortFlags.get(messageId)) {
+            win?.webContents.send('assistant:done', {
+              messageId,
+              citations: [],
+              toolsInvoked: [],
+            })
+          }
+        } catch (err) {
+          win?.webContents.send('assistant:error', {
+            messageId,
+            error: err instanceof Error ? err.message : 'Coding turn failed',
+          })
+        } finally {
+          abortFlags.delete(messageId)
+        }
+        return { messageId, sessionId }
+      }
+
+      let appContext:
+        | { promptContext: string; capabilitiesIncluded: string[]; hadCloudRestrictions: boolean }
+        | undefined
+      try {
+        const broker = getAppContextBroker()
+        if (broker) {
+          const snapshot = await broker.buildSnapshot({
+            classifiedIntent: routeIntent,
+            userInput: message,
+          })
+          if (snapshot.promptContext) {
+            appContext = {
+              promptContext: snapshot.promptContext,
+              capabilitiesIncluded: snapshot.capabilitiesIncluded,
+              hadCloudRestrictions: snapshot.hadCloudRestrictions,
+            }
+          }
+        }
+      } catch {
+        // App context is best-effort — never block the chat turn
+      }
+
+      try {
+        const result = await runTurn({
           userText: message,
           sessionId,
           history,
+          tools: listToolsForModel(),
           ragContext,
+          ...(personaOverride !== undefined ? { personaOverride } : {}),
+          ...(appContext !== undefined ? { appContext } : {}),
           deps: {
-            codingClient,
-            codingModel,
+            chatClient,
+            chatModel,
             onToken: (token) => {
               if (!abortFlags.get(messageId)) {
                 win?.webContents.send('assistant:token', { messageId, token })
               }
             },
+            executeTool: async (toolId, toolParams) => {
+              if (abortFlags.get(messageId)) {
+                return { outcome: 'cancelled' as const }
+              }
+              win?.webContents.send('assistant:toolCall', {
+                messageId,
+                toolId,
+                params: toolParams,
+              })
+              const execResult = await executeTool(
+                toolId,
+                toolParams,
+                { traceId: messageId, actor: 'user' },
+                executorDeps,
+              )
+              win?.webContents.send('assistant:toolResult', {
+                messageId,
+                toolId,
+                outcome: execResult.outcome,
+                result: execResult.outcome === 'success' ? execResult.result : undefined,
+              })
+              return execResult
+            },
             saveTurn: (turn) => {
-              pushCachedTurn(sessionId, { role: turn.role, content: turn.content })
+              pushCachedTurn(sessionId, {
+                role: turn.role,
+                content: turn.content,
+                ...(turn.toolId !== undefined ? { toolId: turn.toolId } : {}),
+                ...(turn.toolResultJson !== undefined
+                  ? { toolResultJson: turn.toolResultJson }
+                  : {}),
+              })
+
               try {
                 sqlite
                   .prepare(
@@ -518,156 +632,51 @@ export function registerAssistantHandlers(): void {
                     sessionId,
                     turn.role,
                     turn.content,
-                    null,
-                    null,
-                    null,
+                    turn.toolId ?? null,
+                    turn.toolParamsJson ?? null,
+                    turn.toolResultJson ?? null,
                     Date.now(),
                   )
+                // Ensure a sessions row exists for cross-table features
                 sqlite
                   .prepare('INSERT OR IGNORE INTO sessions(id, started_at) VALUES(?, ?)')
                   .run(sessionId, Date.now())
               } catch {
-                /* DB may not be migrated yet */
+                // DB may not be migrated yet on first run.
               }
             },
           },
         })
+
         if (!abortFlags.get(messageId)) {
-          win?.webContents.send('assistant:done', { messageId, citations: [], toolsInvoked: [] })
+          win?.webContents.send('assistant:done', {
+            messageId,
+            citations,
+            toolsInvoked: result.toolsInvoked,
+          })
+          // Update session summary for thread list display
+          try {
+            const summary = result.finalText.slice(0, 200)
+            sqlite.prepare('UPDATE sessions SET summary = ? WHERE id = ?').run(summary, sessionId)
+          } catch {
+            // Best-effort; sessions row may not exist yet on first turn
+          }
         }
       } catch (err) {
         win?.webContents.send('assistant:error', {
           messageId,
-          error: err instanceof Error ? err.message : 'Coding turn failed',
+          error: err instanceof Error ? err.message : 'Turn failed',
         })
       } finally {
         abortFlags.delete(messageId)
-        sendQueue?.endForegroundAiTask()
       }
+
       return { messageId, sessionId }
     }
 
-    let appContext:
-      | { promptContext: string; capabilitiesIncluded: string[]; hadCloudRestrictions: boolean }
-      | undefined
-    try {
-      const broker = getAppContextBroker()
-      if (broker) {
-        const snapshot = await broker.buildSnapshot({
-          classifiedIntent: routeIntent,
-          userInput: message,
-        })
-        if (snapshot.promptContext) {
-          appContext = {
-            promptContext: snapshot.promptContext,
-            capabilitiesIncluded: snapshot.capabilitiesIncluded,
-            hadCloudRestrictions: snapshot.hadCloudRestrictions,
-          }
-        }
-      }
-    } catch {
-      // App context is best-effort — never block the chat turn
-    }
-
-    let turnError = false
-    try {
-      const result = await runTurn({
-        userText: message,
-        sessionId,
-        history,
-        tools: listToolsForModel(),
-        ragContext,
-        ...(personaOverride !== undefined ? { personaOverride } : {}),
-        ...(appContext !== undefined ? { appContext } : {}),
-        deps: {
-          chatClient,
-          chatModel,
-          onToken: (token) => {
-            if (!abortFlags.get(messageId)) {
-              win?.webContents.send('assistant:token', { messageId, token })
-            }
-          },
-          executeTool: async (toolId, toolParams) => {
-            if (abortFlags.get(messageId)) {
-              return { outcome: 'cancelled' as const }
-            }
-            win?.webContents.send('assistant:toolCall', { messageId, toolId, params: toolParams })
-            const execResult = await executeTool(
-              toolId,
-              toolParams,
-              { traceId: messageId, actor: 'user' },
-              executorDeps,
-            )
-            win?.webContents.send('assistant:toolResult', {
-              messageId,
-              toolId,
-              outcome: execResult.outcome,
-              result: execResult.outcome === 'success' ? execResult.result : undefined,
-            })
-            return execResult
-          },
-          saveTurn: (turn) => {
-            pushCachedTurn(sessionId, {
-              role: turn.role,
-              content: turn.content,
-              ...(turn.toolId !== undefined ? { toolId: turn.toolId } : {}),
-              ...(turn.toolResultJson !== undefined ? { toolResultJson: turn.toolResultJson } : {}),
-            })
-
-            try {
-              sqlite
-                .prepare(
-                  'INSERT INTO conversation_turns(id,session_id,role,content,tool_id,tool_params_json,tool_result_json,created_at) VALUES(?,?,?,?,?,?,?,?)',
-                )
-                .run(
-                  randomUUID(),
-                  sessionId,
-                  turn.role,
-                  turn.content,
-                  turn.toolId ?? null,
-                  turn.toolParamsJson ?? null,
-                  turn.toolResultJson ?? null,
-                  Date.now(),
-                )
-              // Ensure a sessions row exists for cross-table features
-              sqlite
-                .prepare('INSERT OR IGNORE INTO sessions(id, started_at) VALUES(?, ?)')
-                .run(sessionId, Date.now())
-            } catch {
-              // DB may not be migrated yet on first run.
-            }
-          },
-        },
-      })
-
-      if (!abortFlags.get(messageId)) {
-        win?.webContents.send('assistant:done', {
-          messageId,
-          citations,
-          toolsInvoked: result.toolsInvoked,
-        })
-        // Update session summary for thread list display
-        try {
-          const summary = result.finalText.slice(0, 200)
-          sqlite.prepare('UPDATE sessions SET summary = ? WHERE id = ?').run(summary, sessionId)
-        } catch {
-          // Best-effort; sessions row may not exist yet on first turn
-        }
-      }
-    } catch (err) {
-      turnError = true
-      win?.webContents.send('assistant:error', {
-        messageId,
-        error: err instanceof Error ? err.message : 'Turn failed',
-      })
-    } finally {
-      abortFlags.delete(messageId)
-      sendQueue?.endForegroundAiTask()
-    }
-
-    void turnError
-
-    return { messageId, sessionId }
+    // Run through the queue if available — serialises concurrent turns against
+    // background news/briefing jobs and against each other (fgConcurrency=1).
+    return sendQueue ? sendQueue.enqueueForegroundAiTask(runQueued) : runQueued()
   })
 
   registerHandler('assistant.abort', async (params) => {

@@ -9,7 +9,7 @@
 import type { AppCapabilityId } from '../app-capabilities'
 import { getCapabilityDef } from '../app-capabilities'
 import type { AppContextProvider, AppContextRequest, AppContextSnapshot } from './types'
-import { resolveContextCapabilities } from './intent-router'
+import { resolveContextCapabilities, getRequiredCapabilities } from './intent-router'
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -95,17 +95,25 @@ export function createAppContextBroker(deps: BrokerDeps) {
       ])
 
       // Filter by per-capability config and cloud model restrictions
-      const allowedCapabilities = requestedCapabilities.filter((capId) => {
-        const capEnabled = config.capabilityEnabled[capId]
-        if (capEnabled === false) return false
+      const allowedCapabilities = requestedCapabilities
+        .filter((capId) => {
+          const capEnabled = config.capabilityEnabled[capId]
+          if (capEnabled === false) return false
 
-        if (config.isCloudModel) {
-          const def = getCapabilityDef(capId)
-          if (def && !def.cloudAllowed) return false
-        }
+          if (config.isCloudModel) {
+            const def = getCapabilityDef(capId)
+            if (def && !def.cloudAllowed) return false
+          }
 
-        return true
-      })
+          return true
+        })
+        .sort((a, b) => {
+          // Required capabilities for the resolved intent get budget priority over optional ones
+          const required = getRequiredCapabilities(resolvedIntent)
+          const aRequired = required.includes(a) ? 0 : 1
+          const bRequired = required.includes(b) ? 0 : 1
+          return aRequired - bRequired
+        })
 
       const hadCloudRestrictions =
         config.isCloudModel && allowedCapabilities.length < requestedCapabilities.length

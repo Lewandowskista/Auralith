@@ -136,6 +136,58 @@ export function flushReliabilityToRepo(repo: ReliabilityFlusher, intervalMs = 60
   return () => clearInterval(timer)
 }
 
+// ── Schema hint builder ───────────────────────────────────────────────────────
+
+type ZodLike = { _def?: Record<string, unknown> }
+
+function buildSchemaHint(schema: unknown, fallback: string): string {
+  const def = (schema as ZodLike)?._def
+  if (!def || typeof def !== 'object') return fallback
+
+  const typeName = def['typeName'] as string | undefined
+
+  if (typeName === 'ZodObject') {
+    const shape = def['shape'] as Record<string, ZodLike> | undefined
+    if (shape && typeof shape === 'object') {
+      return JSON.stringify(
+        Object.fromEntries(
+          Object.entries(shape).map(([k, v]) => [
+            k,
+            (v?._def?.['typeName'] as string) ?? 'unknown',
+          ]),
+        ),
+      )
+    }
+  }
+
+  if (typeName === 'ZodEnum') {
+    const values = def['values'] as unknown[]
+    return `one of: ${(values ?? []).join(', ')}`
+  }
+
+  if (typeName === 'ZodArray') {
+    const inner = buildSchemaHint(def['type'], 'unknown')
+    return `[${inner}]`
+  }
+
+  if (typeName === 'ZodDiscriminatedUnion') {
+    const options = def['options'] as ZodLike[] | undefined
+    if (options && options.length > 0) {
+      return `discriminated union with ${options.length} variants`
+    }
+  }
+
+  if (typeName === 'ZodUnion') {
+    const options = def['options'] as ZodLike[] | undefined
+    if (options && options.length > 0) {
+      const variants = options.map((o) => buildSchemaHint(o, '?')).join(' | ')
+      return variants
+    }
+  }
+
+  return fallback
+}
+
 // ── runPrompt ─────────────────────────────────────────────────────────────────
 
 export async function runPrompt<TOut>(
@@ -144,6 +196,7 @@ export async function runPrompt<TOut>(
   client: OllamaClient,
   model: string,
   cache?: PromptCacheStore,
+  signal?: AbortSignal,
 ): Promise<RunResult<TOut>> {
   const stat = getOrCreateStat(model, contract.role, contract.id)
   stat.attempts++
@@ -193,6 +246,7 @@ export async function runPrompt<TOut>(
         maxTokens: contract.maxTokens,
         temperature: contract.temperature,
         num_ctx,
+        ...(signal ? { signal } : {}),
       })
     } catch (err) {
       return {
@@ -238,21 +292,7 @@ export async function runPrompt<TOut>(
   // something actionable rather than the useless string "object".
   let schemaHint: string
   try {
-    const schemaDef = (contract.outputSchema as unknown as Record<string, unknown>)['_def']
-    const shape =
-      schemaDef !== null && typeof schemaDef === 'object' && 'shape' in (schemaDef as object)
-        ? (schemaDef as { shape: unknown }).shape
-        : null
-    schemaHint =
-      shape !== null && typeof shape === 'object'
-        ? JSON.stringify(
-            Object.fromEntries(
-              Object.entries(shape as Record<string, { _def?: { typeName?: string } }>).map(
-                ([k, v]) => [k, v?._def?.typeName ?? 'unknown'],
-              ),
-            ),
-          )
-        : contract.id
+    schemaHint = buildSchemaHint(contract.outputSchema, contract.id)
   } catch {
     schemaHint = contract.id
   }

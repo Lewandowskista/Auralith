@@ -467,6 +467,12 @@ export class VoiceOrchestrator {
     if (this.enabled === enabled) return { conflict: false }
 
     if (enabled) {
+      // Re-enable after crash-induced disable — reset crash counter so the
+      // user can recover without restarting the app.
+      if (this.whisper.isDisabled) {
+        this.whisper.reenable()
+      }
+
       const modelId = this.deps.settingsRepo.get('voice.sttModel', z.string()) ?? 'base.en'
       const resourcesDir = app.isPackaged
         ? join(process.resourcesPath, 'whisper')
@@ -716,12 +722,28 @@ export class VoiceOrchestrator {
       })
     }
 
-    try {
-      await this.deps.sendToAssistant(
-        text,
-        conversationId ?? sessionId,
-        ttsBuffer ? (token) => ttsBuffer.push(token) : undefined,
+    // Guard against a hung Ollama call leaving the orchestrator in 'thinking' forever.
+    // The stream connection has its own 30s timeout in OllamaClient, but an unresponsive
+    // model that slowly trickles bytes would not trigger it. 45s exceeds the turn-runner
+    // wall-clock deadline (30s) and is a reasonable UX upper bound for voice responses.
+    const THINKING_TIMEOUT_MS = 45_000
+    let thinkingTimer: ReturnType<typeof setTimeout> | null = null
+    const thinkingTimeout = new Promise<never>((_, reject) => {
+      thinkingTimer = setTimeout(
+        () => reject(new Error('Assistant response timed out')),
+        THINKING_TIMEOUT_MS,
       )
+    })
+
+    try {
+      await Promise.race([
+        this.deps.sendToAssistant(
+          text,
+          conversationId ?? sessionId,
+          ttsBuffer ? (token) => ttsBuffer.push(token) : undefined,
+        ),
+        thinkingTimeout,
+      ])
 
       if (ttsBuffer) {
         ttsBuffer.flushFinal()
@@ -736,6 +758,7 @@ export class VoiceOrchestrator {
       const message = err instanceof Error ? err.message : 'Assistant error'
       this.deps.broadcast('voice:error', { message })
     } finally {
+      if (thinkingTimer !== null) clearTimeout(thinkingTimer)
       // Transition out of speaking/thinking regardless of success or failure
       if (this.state === 'speaking' || this.state === 'thinking') {
         this.vad.stop()

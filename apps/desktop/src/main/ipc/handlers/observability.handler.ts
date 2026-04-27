@@ -142,21 +142,19 @@ export function registerObservabilityHandlers(): void {
       return `FTS operational (${ftsRows.length} result)`
     })
 
-    // 4. JSON output test (intent classify)
-    await check('json-output', 'Structured output (intent classify)', async () => {
-      const { runPrompt } = await import('@auralith/core-ai')
-      const { INTENT_CLASSIFY_V1 } = await import('@auralith/core-ai')
+    // 4. JSON output test (route classify)
+    await check('json-output', 'Structured output (route classify)', async () => {
+      const { runPrompt, ROUTE_CLASSIFY_V1 } = await import('@auralith/core-ai')
+      const models = await chatClient.listModels()
+      const model = models[0] ?? 'phi4-mini:3.8b'
       const result = await runPrompt(
-        INTENT_CLASSIFY_V1,
-        { utterance: 'what is the weather today?' },
+        ROUTE_CLASSIFY_V1,
+        { message: 'what is the weather today?' },
         chatClient,
-        await (async () => {
-          const models = await chatClient.listModels()
-          return models[0] ?? 'phi4-mini:3.8b'
-        })(),
+        model,
       )
       if (!result.ok) throw new Error(`Parse failed: ${result.error}`)
-      return `ok — intent: ${(result.data as { intent?: string }).intent ?? 'unknown'}`
+      return `ok — intent: ${result.data.intent}`
     })
 
     // 5. Whisper binary + TTS

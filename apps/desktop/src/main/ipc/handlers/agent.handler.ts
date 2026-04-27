@@ -104,10 +104,14 @@ export function registerAgentHandlers(): void {
     }
     agentQueue?.beginForegroundAiTask()
 
+    // Restricted-tier tools require explicit user intent to execute — strip them
+    // from the agent manifest so the planner cannot schedule them autonomously.
+    const agentTools = listToolsForModel().filter((t) => t.tier !== 'restricted')
+
     void runAgentLoop(runId, sessionId, goal, {
       chatClient,
       chatModel,
-      tools: listToolsForModel(),
+      tools: agentTools,
       maxSteps,
       timeoutMs,
       isCancelled: () => cancelFlags.get(runId) ?? false,

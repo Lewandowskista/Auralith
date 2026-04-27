@@ -10,7 +10,7 @@ import {
   SuggestDismissParamsSchema,
   SuggestSnoozeParamsSchema,
 } from '@auralith/core-domain'
-import { executeTool } from '@auralith/core-tools'
+import { executeTool, getTool } from '@auralith/core-tools'
 import { makeExecutorDeps } from '../../tools/confirmation'
 
 let _bundle: DbBundle | null = null
@@ -49,6 +49,14 @@ export async function acceptSuggestionById(
       toolId: string
       params: Record<string, unknown>
     }
+
+    if (!getTool(action.toolId)) {
+      console.warn(
+        `[suggest] accept: toolId "${action.toolId}" not found in current registry — suggestion may be stale`,
+      )
+      return { accepted: true }
+    }
+
     const auditRepo = createAuditRepo(db)
     const settings = createSettingsRepo(db)
     const autoApprove = settings.get('assistant.autoApproveConfirmTier', z.boolean()) ?? false

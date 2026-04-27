@@ -9,6 +9,7 @@ export type ArticleFetchResult = {
 
 export type ArticleFetchOpts = {
   timeoutMs?: number
+  maxBodyBytes?: number
 }
 
 /**
@@ -16,11 +17,13 @@ export type ArticleFetchOpts = {
  * Mozilla Readability, sanitize it, and return the result.
  * Returns null on any error (timeout, HTTP failure, bot block, parse error).
  */
+const DEFAULT_MAX_BODY_BYTES = 500 * 1024 // 500 KB
+
 export async function fetchArticleContent(
   url: string,
   opts: ArticleFetchOpts = {},
 ): Promise<ArticleFetchResult | null> {
-  const { timeoutMs = 8000 } = opts
+  const { timeoutMs = 8000, maxBodyBytes = DEFAULT_MAX_BODY_BYTES } = opts
 
   let html: string
   try {
@@ -36,7 +39,36 @@ export async function fetchArticleContent(
     if (!res.ok) return null
     const contentType = res.headers.get('content-type') ?? ''
     if (!contentType.includes('html')) return null
-    html = await res.text()
+
+    // Guard against very large responses (malicious or CDN error pages)
+    const contentLength = parseInt(res.headers.get('content-length') ?? '0', 10)
+    if (contentLength > maxBodyBytes) return null
+
+    // Stream body with a rolling byte cap so Content-Length absence doesn't bypass guard
+    const reader = res.body?.getReader()
+    if (!reader) return null
+    const chunks: Uint8Array[] = []
+    let totalBytes = 0
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value) {
+        totalBytes += value.byteLength
+        if (totalBytes > maxBodyBytes) {
+          reader.cancel().catch(() => undefined)
+          return null
+        }
+        chunks.push(value)
+      }
+    }
+    html = new TextDecoder().decode(
+      chunks.reduce((acc, c) => {
+        const merged = new Uint8Array(acc.length + c.length)
+        merged.set(acc)
+        merged.set(c, acc.length)
+        return merged
+      }, new Uint8Array(0)),
+    )
   } catch {
     return null
   }

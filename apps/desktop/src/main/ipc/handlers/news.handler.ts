@@ -20,7 +20,7 @@ import {
   NewsFetchItemFullContentParamsSchema,
 } from '@auralith/core-domain'
 import type { OllamaClient, PromptCacheStore } from '@auralith/core-ai'
-import { createPromptCache } from '@auralith/core-ai'
+import { createPromptCache, getAiQueue } from '@auralith/core-ai'
 import { createPromptCacheRepo } from '@auralith/core-db'
 import { runFullPipeline, fetchSingleItemFullContent } from '@auralith/core-news'
 
@@ -209,22 +209,36 @@ export function registerNewsHandlers(): void {
     const { bundle, ollamaClient, classifierModel, summarizeModel, extractModel, promptCache } =
       getDeps()
     const repo = createNewsRepo(bundle.db)
-    // Run pipeline in background — broadcast completion when done
-    void runFullPipeline({
-      repo,
-      ...(ollamaClient ? { ollamaClient } : {}),
-      ...(classifierModel ? { classifierModel } : {}),
-      ...(summarizeModel ? { summarizeModel } : {}),
-      ...(extractModel ? { extractModel } : {}),
-      ...(promptCache ? { promptCache } : {}),
-    })
-      .then(() => {
-        for (const win of BrowserWindow.getAllWindows()) {
-          if (!win.isDestroyed())
-            win.webContents.send('news:fetch-complete', { clustersUpdated: true })
-        }
+    // Run pipeline via background AI slot so it doesn't contend with foreground
+    // user turns for VRAM on the shared Ollama process.
+    const pipelineWork = async (): Promise<void> => {
+      await runFullPipeline({
+        repo,
+        ...(ollamaClient ? { ollamaClient } : {}),
+        ...(classifierModel ? { classifierModel } : {}),
+        ...(summarizeModel ? { summarizeModel } : {}),
+        ...(extractModel ? { extractModel } : {}),
+        ...(promptCache ? { promptCache } : {}),
       })
-      .catch((err: unknown) => console.error('[news] pipeline error:', err))
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed())
+          win.webContents.send('news:fetch-complete', { clustersUpdated: true })
+      }
+    }
+
+    let queued = false
+    try {
+      const queue = getAiQueue()
+      void queue.enqueueBackgroundAiTask(pipelineWork).catch((err: unknown) => {
+        console.error('[news] pipeline error:', err)
+      })
+      queued = true
+    } catch {
+      /* AiQueue not initialized — fall back to unqueued execution */
+    }
+    if (!queued) {
+      void pipelineWork().catch((err: unknown) => console.error('[news] pipeline error:', err))
+    }
     return { triggered: true }
   })
 
