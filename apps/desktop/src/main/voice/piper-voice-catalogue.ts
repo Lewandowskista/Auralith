@@ -220,7 +220,7 @@ function getVoicesDir(): string {
 function getResourcesVoicesDir(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'piper', 'voices')
-    : join(app.getAppPath(), '../../resources/piper/voices')
+    : join(app.getAppPath(), 'resources/piper/voices')
 }
 
 // ---------------------------------------------------------------------------
@@ -360,11 +360,17 @@ function downloadFile(opts: DownloadOpts): Promise<void> {
           },
         },
         (res) => {
-          // Follow redirects
-          if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307) {
+          // Follow redirects — location may be relative, so resolve against the current URL
+          if (
+            res.statusCode === 301 ||
+            res.statusCode === 302 ||
+            res.statusCode === 307 ||
+            res.statusCode === 308
+          ) {
             const location = res.headers.location
             if (location) {
-              attempt(location, retries)
+              const resolved = location.startsWith('http') ? location : new URL(location, url).href
+              attempt(resolved, retries)
             } else {
               reject(new Error('Redirect with no location'))
             }

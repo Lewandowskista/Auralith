@@ -80,6 +80,12 @@ const LlamaToolOutputSchema = z.object({
   parameters: z.record(z.string(), z.unknown()).optional().default({}),
 })
 
+// Alternate tool-call shape some models emit: {"tool_id":"<id>","parameters":{...}}
+const AltToolOutputSchema = z.object({
+  tool_id: z.string(),
+  parameters: z.record(z.string(), z.unknown()).optional().default({}),
+})
+
 function parseTurnOutput(raw: string, tools: ToolManifestEntry[]): TurnOutput | null {
   const cleaned = raw
     .replace(/^```(?:json)?\s*/i, '')
@@ -96,6 +102,15 @@ function parseTurnOutput(raw: string, tools: ToolManifestEntry[]): TurnOutput | 
     const toolId = llamaTool.data.tool
     if (tools.some((tool) => tool.id === toolId)) {
       return { type: 'tool', id: toolId, params: llamaTool.data.parameters }
+    }
+  }
+
+  // Handle alternate shape: {tool_id:"<id>", parameters:{...}}
+  const altTool = AltToolOutputSchema.safeParse(obj)
+  if (altTool.success) {
+    const toolId = altTool.data.tool_id
+    if (tools.some((tool) => tool.id === toolId)) {
+      return { type: 'tool', id: toolId, params: altTool.data.parameters }
     }
   }
 
@@ -135,6 +150,7 @@ function buildSystemPrompt(
   personaOverride?: string,
   appContext?: AppContextInjection,
   includeNewsRules?: boolean,
+  voiceMode?: boolean,
 ): string {
   // TOON-like compact record table for tool catalog.
   // Saves ~40% tokens vs pretty-printed JSON for typical tool lists on small models.
@@ -177,6 +193,17 @@ You can either speak a response or call a tool. Respond with ONLY valid JSON in 
 To speak (answer, chat, explain):
 {"type":"speak","text":"your response here"}
 
+The "text" field supports full Markdown. Use it freely:
+- **Bold**, *italic*, ~~strikethrough~~, \`inline code\`
+- # H1 / ## H2 / ### H3 headings for structure
+- Bullet lists (- item) and numbered lists (1. item), including nested indented lists
+- Fenced code blocks with language tag (\`\`\`python ... \`\`\`)
+- Tables (| col | col | / |---|---|)
+- Blockquotes (> text)
+- [link text](url) for URLs
+- Task lists (- [ ] todo / - [x] done)
+- Escape newlines as \\n inside the JSON string value.
+
 To call a tool:
 {"type":"tool","id":"<tool_id>","params":{...}}
 
@@ -185,6 +212,7 @@ ${toolsSection}
 
 Rules:
 - Prefer speaking over tool use when no action is needed.
+${voiceMode ? '- VOICE MODE ACTIVE — follow the voice response rules at the bottom of this prompt instead of using Markdown.' : '- Use rich Markdown in every response where it improves readability — lists, headings, code blocks, tables, bold/italic emphasis. Plain prose is only appropriate for very short answers.'}
 - When the ## Auralith App Context section is present, use it as the source of truth for weather, news, activity, knowledge, routines, and suggestions. Do not invent data not present there.
 - If app context for a module is absent, say so honestly rather than guessing.
 - For questions about current/local Auralith app data not in the context above, use a safe read tool before answering when one is available.
@@ -192,7 +220,6 @@ Rules:
 - Never invent tool IDs not listed above.
 - High-risk (restricted) tools require explicit user confirmation before execution.
 - Do not claim you lack access to Auralith features when the capability context or tools show that you do have access.
-- Use markdown formatting (bullets, bold, code blocks, tables) when it aids clarity in your response text.
 - If the user's request is ambiguous, ask one focused clarifying question before proceeding.
 - When the user refers to "it", "that", or "the previous", look back in the conversation history to resolve the reference.
 
@@ -217,7 +244,18 @@ Do not invent, infer, or paraphrase article titles — copy them exactly from th
 
 `
     : ''
-}- Reply with ONLY the JSON object — no prose, no code fences.`
+}${
+    voiceMode
+      ? `
+
+VOICE RESPONSE RULES (user is listening, not reading):
+- Keep responses to 1-3 sentences unless detail is explicitly requested.
+- Never use markdown: no lists, no code blocks, no headers, no bold, no tables.
+- Write as natural spoken English. Spell out numbers and abbreviations.
+- If a longer explanation is needed, offer to follow up in text instead.
+- Never start with "Certainly!" or filler phrases — go straight to the answer.`
+      : ''
+  }- Reply with ONLY the JSON object — no prose, no code fences.`
 }
 
 // ── Turn runner ───────────────────────────────────────────────────────────────
@@ -241,10 +279,21 @@ export async function runTurn(opts: {
   personaOverride?: string
   /** Pre-built app context from the AppContextBroker — injects weather, news, activity, etc. */
   appContext?: AppContextInjection
+  /** When true, injects voice response rules: concise spoken-English, no markdown. */
+  voiceMode?: boolean
   deps: TurnRunnerDeps
 }): Promise<TurnRunnerResult> {
-  const { userText, sessionId, history, tools, ragContext, personaOverride, appContext, deps } =
-    opts
+  const {
+    userText,
+    sessionId,
+    history,
+    tools,
+    ragContext,
+    personaOverride,
+    appContext,
+    voiceMode,
+    deps,
+  } = opts
   const deadline = Date.now() + WALL_CLOCK_MS
   const { num_ctx } = resolveModelConfig(deps.chatRole ?? 'chat', { model: deps.chatModel })
 
@@ -260,6 +309,7 @@ export async function runTurn(opts: {
     personaOverride,
     appContext,
     includeNewsRules,
+    voiceMode,
   )
 
   // Build message history for Ollama — keep last 12 turns; compress older turns to save tokens

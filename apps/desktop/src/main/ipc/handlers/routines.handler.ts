@@ -188,7 +188,7 @@ export function registerRoutinesHandlers(): void {
   registerHandler('routines.listExamples', async () => {
     const resourcesPath = app.isPackaged
       ? join(process.resourcesPath, 'routines', 'examples', 'marketplace.json')
-      : join(app.getAppPath(), '../../resources/routines/examples/marketplace.json')
+      : join(app.getAppPath(), 'resources/routines/examples/marketplace.json')
 
     if (!existsSync(resourcesPath)) return { examples: [] }
 
@@ -207,7 +207,7 @@ export function registerRoutinesHandlers(): void {
 
     const resourcesPath = app.isPackaged
       ? join(process.resourcesPath, 'routines', 'examples', 'marketplace.json')
-      : join(app.getAppPath(), '../../resources/routines/examples/marketplace.json')
+      : join(app.getAppPath(), 'resources/routines/examples/marketplace.json')
 
     if (!existsSync(resourcesPath)) throw new Error('Marketplace file not found')
 

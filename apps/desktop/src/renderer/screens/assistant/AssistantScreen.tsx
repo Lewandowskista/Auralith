@@ -45,12 +45,19 @@ type Citation = {
   text: string
 }
 
+type Attachment = {
+  type: 'image'
+  name: string
+  dataUrl: string
+}
+
 type Message = {
   id: string
   role: 'user' | 'assistant'
   content: string
   citations?: Citation[]
   streaming?: boolean
+  attachments?: Attachment[]
 }
 
 type Thread = {
@@ -123,19 +130,9 @@ function ThinkingDots(): ReactElement {
 }
 
 function StreamingMessage({ content }: { content: string }): ReactElement {
-  const parts = content.split(/(\s+)/)
   return (
-    <span style={{ whiteSpace: 'pre-wrap' }}>
-      {parts.map((part, i) => (
-        <motion.span
-          key={i}
-          initial={{ opacity: 0, y: 2 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.1, ease: [0.2, 0.8, 0.2, 1] }}
-        >
-          {part}
-        </motion.span>
-      ))}
+    <div className="prose-auralith relative">
+      {renderMarkdown(content)}
       <span
         style={{
           width: 2,
@@ -148,7 +145,7 @@ function StreamingMessage({ content }: { content: string }): ReactElement {
           verticalAlign: 'middle',
         }}
       />
-    </span>
+    </div>
   )
 }
 
@@ -160,8 +157,10 @@ function cleanAssistantContent(raw: string): string {
       // Handle {"type":"speak","text":"..."} envelope
       if (parsed['type'] === 'speak' && typeof parsed['text'] === 'string')
         return parsed['text'] as string
-      // Legacy {"speak":"..."} envelope
+      // {"speak":"..."} envelope
       if (typeof parsed['speak'] === 'string') return parsed['speak'] as string
+      // {"response":"..."} envelope
+      if (typeof parsed['response'] === 'string') return parsed['response'] as string
     } catch {
       /* fall through */
     }
@@ -235,6 +234,7 @@ export function AssistantScreen(): ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const pendingAttachmentsRef = useRef<Attachment[]>([])
   const { status: ollamaStatus, retry: retryOllama } = useOllamaStatus()
 
   useEffect(() => {
@@ -493,7 +493,16 @@ export function AssistantScreen(): ReactElement {
     if (!text || activeMessageId) return
     setInput('')
 
-    const userMsg: Message = { id: `u-${Date.now()}`, role: 'user', content: text }
+    const attachments =
+      pendingAttachmentsRef.current.length > 0 ? [...pendingAttachmentsRef.current] : undefined
+    pendingAttachmentsRef.current = []
+
+    const userMsg: Message = {
+      id: `u-${Date.now()}`,
+      role: 'user',
+      content: text,
+      ...(attachments ? { attachments } : {}),
+    }
     const assistantMsgId = `a-${Date.now()}`
     const assistantMsg: Message = {
       id: assistantMsgId,
@@ -513,7 +522,7 @@ export function AssistantScreen(): ReactElement {
     const res = await window.auralith.invoke('assistant.send', {
       message: text,
       messageId: assistantMsgId,
-      model: selectedModel,
+      ...(selectedModel ? { model: selectedModel } : {}),
       ...(activeThreadId ? { sessionId: activeThreadId } : {}),
     })
 
@@ -1525,18 +1534,39 @@ export function AssistantScreen(): ReactElement {
                       }
                     >
                       {message.role === 'user' ? (
-                        <div
-                          data-testid="user-message"
-                          className="max-w-[72%] text-[13px] leading-relaxed"
-                          style={{
-                            padding: '10px 16px',
-                            borderRadius: '16px 16px 4px 16px',
-                            background: 'rgba(139,92,246,0.18)',
-                            border: '1px solid rgba(139,92,246,0.22)',
-                            color: 'var(--color-text-primary)',
-                          }}
-                        >
-                          {message.content}
+                        <div className="flex max-w-[72%] flex-col items-end gap-1.5">
+                          {/* Inline image attachments */}
+                          {message.attachments?.map((att, ai) =>
+                            att.type === 'image' ? (
+                              <img
+                                key={ai}
+                                src={att.dataUrl}
+                                alt={att.name}
+                                title={att.name}
+                                className="rounded-xl"
+                                style={{
+                                  maxWidth: '100%',
+                                  maxHeight: 320,
+                                  objectFit: 'contain',
+                                  border: '1px solid rgba(139,92,246,0.25)',
+                                  display: 'block',
+                                }}
+                              />
+                            ) : null,
+                          )}
+                          <div
+                            data-testid="user-message"
+                            className="text-[13px] leading-relaxed"
+                            style={{
+                              padding: '10px 16px',
+                              borderRadius: '16px 16px 4px 16px',
+                              background: 'rgba(139,92,246,0.18)',
+                              border: '1px solid rgba(139,92,246,0.22)',
+                              color: 'var(--color-text-primary)',
+                            }}
+                          >
+                            {message.content}
+                          </div>
                         </div>
                       ) : (
                         <div data-testid="assistant-message" className="max-w-[88%]">
@@ -1579,7 +1609,9 @@ export function AssistantScreen(): ReactElement {
                               message.content === '' ? (
                                 <ThinkingDots />
                               ) : (
-                                <StreamingMessage content={message.content} />
+                                <StreamingMessage
+                                  content={cleanAssistantContent(message.content)}
+                                />
                               )
                             ) : (
                               renderContent(
@@ -1859,12 +1891,19 @@ export function AssistantScreen(): ReactElement {
                     if (!file) return
                     const isImage = file.type.startsWith('image/')
                     if (isImage) {
-                      setInput((prev) =>
-                        prev
-                          ? `${prev}\n\n[Attached image: ${file.name}]`
-                          : `[Attached image: ${file.name}]`,
-                      )
-                      toast.success(`Image "${file.name}" attached`)
+                      const reader = new FileReader()
+                      reader.onload = () => {
+                        const dataUrl = reader.result as string
+                        pendingAttachmentsRef.current = [
+                          ...pendingAttachmentsRef.current,
+                          { type: 'image', name: file.name, dataUrl },
+                        ]
+                        setInput((prev) =>
+                          prev ? `${prev}\n\n[Image: ${file.name}]` : `[Image: ${file.name}]`,
+                        )
+                        toast.success(`Image "${file.name}" attached`)
+                      }
+                      reader.readAsDataURL(file)
                     } else {
                       setInput((prev) =>
                         prev

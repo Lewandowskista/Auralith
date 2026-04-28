@@ -43,7 +43,7 @@ describe('WhisperClient worker path', () => {
     expect(postMessage).toHaveBeenCalledWith({
       type: 'load',
       modelPath: 'C:\\Users\\Stefan\\ProjectTank\\resources\\whisper\\ggml-base.en-q5_1.bin',
-      binPath: 'C:\\Users\\Stefan\\ProjectTank\\resources\\whisper\\whisper.exe',
+      binPath: 'C:\\Users\\Stefan\\ProjectTank\\apps\\desktop\\resources\\whisper\\whisper.exe',
     })
   })
 })

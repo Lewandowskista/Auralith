@@ -10,7 +10,7 @@
  *   { type: 'flush' }                     — cancel current audio (barge-in)
  *
  * Messages OUT (via port):
- *   { type: 'buffer-empty' }              — sent when the ring buffer drains
+ *   { type: 'buffer-empty', id: string }  — sent when the ring buffer drains (id = last synthesis id)
  */
 
 // We declare only the types we need from the AudioWorklet globals.
@@ -33,11 +33,13 @@ class TtsAudioProcessor extends AudioWorkletProcessor {
   private writePos = 0
   private readPos = 0
   private flushing = false
+  // Track the synthesis id of the most recently written chunk for buffer-empty correlation
+  private lastId = ''
 
   constructor() {
     super()
     this.port.onmessage = (e: MessageEvent) => {
-      const msg = e.data as { type: string; chunk?: ArrayBuffer }
+      const msg = e.data as { type: string; chunk?: ArrayBuffer; id?: string }
       if (msg.type === 'flush') {
         // Drop all buffered audio immediately
         this.writePos = this.readPos
@@ -45,6 +47,7 @@ class TtsAudioProcessor extends AudioWorkletProcessor {
         return
       }
       if (msg.type === 'pcm' && msg.chunk) {
+        if (msg.id) this.lastId = msg.id
         this.writePcm(msg.chunk)
       }
     }
@@ -89,9 +92,9 @@ class TtsAudioProcessor extends AudioWorkletProcessor {
       for (let i = toCopy; i < len; i++) {
         channel[i] = 0
       }
-      // Signal when buffer drains
+      // Signal when buffer drains, carrying the last synthesis id for correlation
       if (this.available() === 0 && avail > 0) {
-        this.port.postMessage({ type: 'buffer-empty' })
+        this.port.postMessage({ type: 'buffer-empty', id: this.lastId })
       }
     }
 

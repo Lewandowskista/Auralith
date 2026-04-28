@@ -22,6 +22,7 @@ import { listToolsForModel, executeTool } from '@auralith/core-tools'
 import type Database from 'better-sqlite3'
 import type { ExecutorDeps } from '@auralith/core-tools'
 import { getAppContextBroker } from '../../ai/app-context-setup'
+import type { VoiceIntent } from '../../voice/intent-classifier'
 
 type AssistantDeps = {
   bundle: DbBundle
@@ -192,6 +193,7 @@ export async function sendVoiceMessage(
   win: BrowserWindow | null,
   conversationId?: string,
   onSpeakChunk?: (chunk: string) => void,
+  voiceIntent?: VoiceIntent,
 ): Promise<{ messageId: string }> {
   const { bundle, sqlite, chatClient, chatModel, embedClient, embedModel, executorDeps } = getDeps()
   const settings = createSettingsRepo(bundle.db)
@@ -204,40 +206,46 @@ export async function sendVoiceMessage(
   let ragContext = ''
   let citations: ReturnType<typeof assembleCitations>['citations'] = []
 
-  try {
-    const { router } = getDeps()
-    const settingsVoice = createSettingsRepo(bundle.db)
-    const queryRewriteVoice = settingsVoice.get('retrieval.queryRewrite', z.boolean()) ?? true
-    const parentContextVoice = settingsVoice.get('retrieval.parentContext', z.number()) ?? 1
+  // VOICE_QUERY (factual, no personal context needed) skips retrieval entirely.
+  if (voiceIntent !== 'VOICE_QUERY') {
+    try {
+      const { router } = getDeps()
+      const settingsVoice = createSettingsRepo(bundle.db)
+      const queryRewriteVoice = settingsVoice.get('retrieval.queryRewrite', z.boolean()) ?? true
+      const parentContextVoice = settingsVoice.get('retrieval.parentContext', z.number()) ?? 1
 
-    const additionalQueriesVoice =
-      queryRewriteVoice && router
-        ? await rewriteQuery(text, embedClient, router.modelFor('classifier'))
-        : []
+      const additionalQueriesVoice =
+        queryRewriteVoice && router
+          ? await rewriteQuery(text, embedClient, router.modelFor('classifier'))
+          : []
 
-    const hits = await hybridSearch(
-      {
-        query: text,
-        topK: 6,
-        mode: 'hybrid',
-        additionalQueries: additionalQueriesVoice,
-        parentContext: parentContextVoice,
-      },
-      bundle.db,
-      sqlite,
-      bundle.vec,
-      embedClient,
-      embedModel,
-    )
-    const assembled = assembleCitations(hits)
-    citations = assembled.citations
-    if (assembled.chunks.length > 0) {
-      ragContext = assembled.chunks
-        .map((chunk) => `[${chunk.n}] (${chunk.path})\n${chunk.text}`)
-        .join('\n\n---\n\n')
+      // KNOWLEDGE_SEARCH gets wider retrieval; other intents use default topK.
+      const topK = voiceIntent === 'KNOWLEDGE_SEARCH' ? 10 : 6
+
+      const hits = await hybridSearch(
+        {
+          query: text,
+          topK,
+          mode: 'hybrid',
+          additionalQueries: additionalQueriesVoice,
+          parentContext: parentContextVoice,
+        },
+        bundle.db,
+        sqlite,
+        bundle.vec,
+        embedClient,
+        embedModel,
+      )
+      const assembled = assembleCitations(hits)
+      citations = assembled.citations
+      if (assembled.chunks.length > 0) {
+        ragContext = assembled.chunks
+          .map((chunk) => `[${chunk.n}] (${chunk.path})\n${chunk.text}`)
+          .join('\n\n---\n\n')
+      }
+    } catch {
+      // No retrieval context — continue without it.
     }
-  } catch {
-    // No retrieval context — continue without it.
   }
 
   const cachedHistory = sessionHistories.get(sessionId) ?? loadRecentTurnHistory(sqlite, sessionId)
@@ -285,6 +293,7 @@ export async function sendVoiceMessage(
       history,
       tools: listToolsForModel(),
       ragContext,
+      voiceMode: true,
       ...(personaOverride !== undefined ? { personaOverride } : {}),
       ...(voiceAppContext !== undefined ? { appContext: voiceAppContext } : {}),
       deps: {
@@ -391,7 +400,7 @@ export function registerAssistantHandlers(): void {
       embedModel,
       executorDeps,
     } = getDeps()
-    const chatModel = modelOverride ?? defaultChatModel
+    const chatModel = modelOverride || defaultChatModel
     const settings = createSettingsRepo(bundle.db)
     const personaOverride = settings.get('assistant.personaOverride', z.string())
     const messageId = clientMessageId ?? randomUUID()

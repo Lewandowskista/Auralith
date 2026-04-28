@@ -2,6 +2,10 @@ import { utilityProcess, app } from 'electron'
 import type { UtilityProcess } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
+import { randomUUID } from 'crypto'
+import type { SidecarManager } from './sidecar-manager'
+
+export type WordTimestamp = { word: string; start: number; end: number }
 
 type WorkerMsg =
   | { type: 'ready' }
@@ -31,6 +35,12 @@ export class WhisperClient {
   private onDisabled?: (reason: string) => void
   private onPartialBroadcast?: (text: string) => void
 
+  // Sidecar delegation
+  private sidecarManager: SidecarManager | null = null
+  private sidecarChunkBuffer: Buffer[] = []
+  private lastWordTimestamps: WordTimestamp[] = []
+  private sidecarUnsubscribe: (() => void) | null = null
+
   setOnDisabled(cb: (reason: string) => void): void {
     this.onDisabled = cb
   }
@@ -39,8 +49,19 @@ export class WhisperClient {
     this.onPartialBroadcast = cb
   }
 
+  setSidecarManager(manager: SidecarManager): void {
+    this.sidecarManager = manager
+  }
+
+  /** Word-level timestamps from the last faster-whisper transcription (sidecar path only). */
+  getWordTimestamps(): WordTimestamp[] {
+    return this.lastWordTimestamps
+  }
+
   get ready(): boolean {
-    return !this.disabled && this.proc !== null && this.modelPath !== ''
+    if (this.disabled) return false
+    // Ready if sidecar is available, or if the worker process is running
+    return (this.sidecarManager?.ready ?? false) || (this.proc !== null && this.modelPath !== '')
   }
 
   get isDisabled(): boolean {
@@ -58,7 +79,7 @@ export class WhisperClient {
   private getWhisperBinPath(): string {
     const resourcesDir = app.isPackaged
       ? join(process.resourcesPath, 'whisper')
-      : join(app.getAppPath(), '../../resources/whisper')
+      : join(app.getAppPath(), 'resources/whisper')
     return join(resourcesDir, 'whisper.exe')
   }
 
@@ -174,17 +195,30 @@ export class WhisperClient {
 
   ensureRunning(): void {
     if (this.disabled) throw new Error('Whisper is disabled due to repeated crashes')
+    // When sidecar is available, no worker process is needed
+    if (this.sidecarManager?.ready) return
     if (!this.proc) {
       this.spawnWorker()
     }
   }
 
   pushChunk(pcm16: Buffer): void {
+    // Always buffer for sidecar path
+    if (this.sidecarManager?.ready) {
+      this.sidecarChunkBuffer.push(pcm16)
+      return
+    }
     if (!this.proc) return
     this.send({ type: 'chunk', pcm16Base64: pcm16.toString('base64') })
   }
 
   finalize(): Promise<{ text: string }> {
+    // ── Sidecar path (faster-whisper) ──────────────────────────────────────
+    if (this.sidecarManager?.ready) {
+      return this.finalizeViaSidecar()
+    }
+
+    // ── Worker path (whisper.cpp) ──────────────────────────────────────────
     return new Promise((resolve, reject) => {
       if (!this.proc) {
         reject(new Error('Whisper worker not running'))
@@ -201,7 +235,58 @@ export class WhisperClient {
     })
   }
 
+  private finalizeViaSidecar(): Promise<{ text: string }> {
+    return new Promise((resolve, reject) => {
+      const sidecar = this.sidecarManager
+      if (!sidecar) {
+        reject(new Error('Sidecar STT is not available'))
+        return
+      }
+      const id = randomUUID()
+
+      // Concatenate all buffered PCM chunks, base64-encode
+      const allPcm = Buffer.concat(this.sidecarChunkBuffer)
+      this.sidecarChunkBuffer = []
+
+      const timeoutMs = 30_000
+      let settled = false
+      const timer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        unsub()
+        reject(new Error('Sidecar STT timed out'))
+      }, timeoutMs)
+
+      const unsub = sidecar.onModule('stt', (msg) => {
+        if (msg['id'] !== id) return
+        if (settled) return
+        if (msg.type === 'result') {
+          settled = true
+          clearTimeout(timer)
+          unsub()
+          const text = (msg['text'] as string | undefined) ?? ''
+          const words = (msg['words'] as WordTimestamp[] | undefined) ?? []
+          this.lastWordTimestamps = words
+          resolve({ text })
+        } else if (msg.type === 'error') {
+          settled = true
+          clearTimeout(timer)
+          unsub()
+          reject(new Error((msg['message'] as string | undefined) ?? 'Sidecar STT error'))
+        }
+      })
+
+      sidecar.sendCommand({
+        module: 'stt',
+        cmd: 'transcribe',
+        id,
+        audio_b64: allPcm.toString('base64'),
+      })
+    })
+  }
+
   abort(): void {
+    this.sidecarChunkBuffer = []
     this.callbacks = null
     this.stopWorker()
   }

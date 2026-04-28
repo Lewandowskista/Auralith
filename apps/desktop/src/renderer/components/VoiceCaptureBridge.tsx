@@ -9,8 +9,7 @@ type CaptureRuntime = {
   stream: MediaStream
   audioContext: AudioContext
   source: MediaStreamAudioSourceNode
-  processor: ScriptProcessorNode
-  gain: GainNode
+  workletNode: AudioWorkletNode
 }
 
 export function VoiceCaptureBridge(): ReactElement | null {
@@ -32,15 +31,23 @@ export function VoiceCaptureBridge(): ReactElement | null {
           },
         })
         audioContext = new AudioContext()
-        const source = audioContext.createMediaStreamSource(stream)
-        const processor = audioContext.createScriptProcessor(4096, 1, 1)
-        const gain = audioContext.createGain()
-        gain.gain.value = 0
 
-        processor.onaudioprocess = (event) => {
-          const input = event.inputBuffer.getChannelData(0)
+        // Load capture worklet on the audio thread
+        const processorUrl = new URL('../lib/audio/capture-worklet.processor.js', import.meta.url)
+        await audioContext.audioWorklet.addModule(processorUrl.href)
+
+        const source = audioContext.createMediaStreamSource(stream)
+        // numberOfOutputs: 0 — capture-only node, no audio routed to speaker
+        const workletNode = new AudioWorkletNode(audioContext, 'capture-processor', {
+          numberOfOutputs: 0,
+        })
+
+        workletNode.port.onmessage = (
+          event: MessageEvent<{ type: string; samples: Float32Array }>,
+        ) => {
+          if (event.data.type !== 'pcm') return
           if (!audioContext) return
-          const downsampled = downsampleFloat32(input, audioContext.sampleRate, 16_000)
+          const downsampled = downsampleFloat32(event.data.samples, audioContext.sampleRate, 16_000)
           const pcm16 = floatToPcm16(downsampled)
           if (pcm16.length === 0) return
           void window.auralith.invoke('voice.pushChunk', {
@@ -49,13 +56,10 @@ export function VoiceCaptureBridge(): ReactElement | null {
           })
         }
 
-        source.connect(processor)
-        processor.connect(gain)
-        gain.connect(audioContext.destination)
+        source.connect(workletNode)
 
-        runtimeRef.current = { sessionId, stream, audioContext, source, processor, gain }
+        runtimeRef.current = { sessionId, stream, audioContext, source, workletNode }
       } catch (err) {
-        // Ensure AudioContext is released even if setup fails after it was created
         if (audioContext) void audioContext.close().catch(() => undefined)
         const message = err instanceof Error ? err.message : 'Microphone capture failed'
         console.error('[voice-capture]', message)
@@ -77,10 +81,9 @@ export function VoiceCaptureBridge(): ReactElement | null {
       const runtime = runtimeRef.current
       if (!runtime) return
       runtimeRef.current = null
-      runtime.processor.onaudioprocess = null
+      runtime.workletNode.port.onmessage = null
       runtime.source.disconnect()
-      runtime.processor.disconnect()
-      runtime.gain.disconnect()
+      runtime.workletNode.disconnect()
       for (const track of runtime.stream.getTracks()) {
         track.stop()
       }

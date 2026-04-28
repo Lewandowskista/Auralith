@@ -37,6 +37,9 @@ export class PiperTtsService extends EventEmitter {
   // Pending resolve/reject keyed by synthesis id
   private pending = new Map<string, { resolve: () => void; reject: (e: Error) => void }>()
 
+  // Playback completion resolvers keyed by synthesis id (resolved when renderer buffer drains)
+  private playbackResolvers = new Map<string, () => void>()
+
   constructor() {
     super()
     this._available = this.checkBinaryExists()
@@ -53,7 +56,7 @@ export class PiperTtsService extends EventEmitter {
   private getBinPath(): string {
     return app.isPackaged
       ? join(process.resourcesPath, 'piper', 'piper.exe')
-      : join(app.getAppPath(), '../../resources/piper/piper.exe')
+      : join(app.getAppPath(), 'resources/piper/piper.exe')
   }
 
   private getWorkerPath(): string {
@@ -286,6 +289,76 @@ export class PiperTtsService extends EventEmitter {
       // Emit so orchestrator can transition to speaking state
       this.emit('speak-start', entry.id)
     })
+  }
+
+  /**
+   * Start synthesis of a text chunk without blocking on playback completion.
+   * Returns two promises:
+   *   pcmDone    — resolves when all PCM has been sent to the renderer (synthesis done)
+   *   playbackDone — resolves when the renderer's ring buffer drains for this synthesis id
+   *
+   * playbackDone is resolved by notifyPlaybackDone() called from the IPC handler
+   * when the renderer sends back voice:tts-buffer-empty with matching id.
+   */
+  synthesizeAsync(
+    text: string,
+    voiceId?: string,
+    lengthScale?: number,
+  ): { id: string; pcmDone: Promise<void>; playbackDone: Promise<void> } {
+    const id = randomUUID()
+
+    let resolvePcm!: () => void
+    let rejectPcm!: (e: Error) => void
+    const pcmDone = new Promise<void>((res, rej) => {
+      resolvePcm = res
+      rejectPcm = rej
+    })
+
+    let resolvePlayback!: () => void
+    const playbackDone = new Promise<void>((res) => {
+      resolvePlayback = res
+    })
+
+    this.playbackResolvers.set(id, resolvePlayback)
+
+    // Kick off voice setup and synthesis without awaiting here
+    void (async () => {
+      try {
+        if (voiceId && voiceId !== this.currentVoiceId) {
+          await this.setVoice(voiceId)
+        } else if (!this.currentVoiceId) {
+          const voices = listInstalledPiperVoices()
+          const firstVoice = voices[0]
+          if (!firstVoice) throw new Error('No Piper voices installed')
+          await this.setVoice(firstVoice.id)
+        }
+
+        if (!this.proc && !this.spawnWorker()) throw new Error('Failed to start piper worker')
+
+        await new Promise<void>((resolve, reject) => {
+          this.pending.set(id, { resolve, reject })
+          this.proc?.postMessage({ type: 'synthesize', id, text, lengthScale })
+          this.emit('speak-start', id)
+        })
+
+        resolvePcm()
+      } catch (err) {
+        this.playbackResolvers.delete(id)
+        resolvePlayback() // don't leave caller hanging
+        rejectPcm(err instanceof Error ? err : new Error('Piper synthesis error'))
+      }
+    })()
+
+    return { id, pcmDone, playbackDone }
+  }
+
+  /** Called by the IPC handler when the renderer reports that a synthesis id's buffer drained. */
+  notifyPlaybackDone(id: string): void {
+    const resolve = this.playbackResolvers.get(id)
+    if (resolve) {
+      this.playbackResolvers.delete(id)
+      resolve()
+    }
   }
 
   dispose(): void {

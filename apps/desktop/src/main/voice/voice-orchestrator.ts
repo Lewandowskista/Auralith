@@ -8,6 +8,7 @@ import { TtsFacade } from './tts-facade'
 import { WakeWordService } from './wake-word-service'
 import { VadService } from './vad-service'
 import { StreamingTtsBuffer } from './streaming-tts-buffer'
+import { TtsSynthesisQueue } from './tts-synthesis-queue'
 import {
   createConversationSession,
   clearSessionTimers,
@@ -22,9 +23,12 @@ import {
   deletePiperVoice,
   type VoiceDownloadProgress,
 } from './piper-voice-catalogue'
+import type { OllamaClient } from '@auralith/core-ai'
 import type { SettingsRepo } from '@auralith/core-db'
 import type Database from 'better-sqlite3'
 import { z } from 'zod'
+import { classifySystemCommand, classifyVoiceIntent, type VoiceIntent } from './intent-classifier'
+import { SidecarManager } from './sidecar-manager'
 
 // Public state emitted to renderers (superset of internal VoiceConvState)
 type PublicVoiceState = VoiceConvState
@@ -39,9 +43,14 @@ type OrchDeps = {
     text: string,
     conversationId: string,
     onSpeakChunk?: (chunk: string) => void,
+    voiceIntent?: VoiceIntent,
   ) => Promise<{ messageId: string }>
   /** Broadcast to all renderer windows */
   broadcast: (channel: string, data: unknown) => void
+  /** Optional: Ollama client for intent classification. When absent, all intents route as ASSISTANT_CHAT. */
+  chatClient?: OllamaClient
+  /** Optional: model to use for intent classification (should be a fast/cheap model). */
+  classifierModel?: string
 }
 
 export class VoiceOrchestrator {
@@ -50,6 +59,7 @@ export class VoiceOrchestrator {
   private tts: TtsFacade
   private wakeWord: WakeWordService
   private vad: VadService
+  private sidecar: SidecarManager
   private deps: OrchDeps
   private state: PublicVoiceState = 'idle'
   private activeSessions = new Map<string, { startedAt: number }>()
@@ -73,9 +83,12 @@ export class VoiceOrchestrator {
 
   constructor(deps: OrchDeps) {
     this.deps = deps
+    this.sidecar = new SidecarManager()
     this.whisper = new WhisperClient()
+    this.whisper.setSidecarManager(this.sidecar)
     this.tts = new TtsFacade()
     this.wakeWord = new WakeWordService()
+    this.wakeWord.setSidecarManager(this.sidecar)
 
     // Forward piper fallback toast to renderer
     this.tts.on('piper-fallback', (message: string) => {
@@ -84,6 +97,29 @@ export class VoiceOrchestrator {
       })
     })
     this.vad = new VadService()
+
+    // Attempt to load the Silero-VAD ONNX model. Falls back to energy-based detection silently.
+    const vadModelPath = app.isPackaged
+      ? join(process.resourcesPath, 'vad', 'silero_vad.onnx')
+      : join(app.getAppPath(), 'resources/vad', 'silero_vad.onnx')
+    void this.vad.loadModel(vadModelPath)
+
+    // Start the Python sidecar (faster-whisper + openWakeWord).
+    // Falls back gracefully to whisper.exe worker and PowerShell wake word if unavailable.
+    this.sidecar.start()
+    this.sidecar.on('ready', () => {
+      const sttModel = this.deps.settingsRepo.get('voice.sttModel', z.string()) ?? 'distil-small.en'
+      this.sidecar.sendCommand({
+        module: 'stt',
+        cmd: 'load',
+        model: sttModel,
+        device: 'cpu',
+        compute_type: 'int8',
+      })
+    })
+    this.sidecar.on('error', (err: Error) => {
+      this.deps.broadcast('voice:warning', { message: err.message })
+    })
 
     // Wake word detection triggers a capture start (same as PTT)
     this.wakeWord.on('detected', () => {
@@ -183,7 +219,7 @@ export class VoiceOrchestrator {
   checkResources(): { whisperBinFound: boolean; modelsFound: string[]; resourcesOk: boolean } {
     const resourcesDir = app.isPackaged
       ? join(process.resourcesPath, 'whisper')
-      : join(app.getAppPath(), '../../resources/whisper')
+      : join(app.getAppPath(), 'resources/whisper')
 
     const binName = process.platform === 'win32' ? 'whisper.exe' : 'whisper'
     const whisperBinFound = existsSync(join(resourcesDir, binName))
@@ -209,6 +245,7 @@ export class VoiceOrchestrator {
       enabled: this.enabled,
       sttReady: this.whisper.ready,
       ttsReady: this.tts.available,
+      sidecarReady: this.sidecar.ready,
       micGranted,
       state: this.state,
       resourcesOk,
@@ -365,6 +402,10 @@ export class VoiceOrchestrator {
     // Raise VAD threshold during playback to reduce speaker bleed false-triggers
     const vadThreshold = this.deps.settingsRepo.get('voice.vadThreshold', z.number()) ?? 0.015
     this.vad.setThreshold(vadThreshold * 1.5)
+    // In ONNX mode, also nudge the probability threshold slightly upward
+    const vadProbThreshold =
+      this.deps.settingsRepo.get('voice.vadProbabilityThreshold', z.number()) ?? 0.5
+    this.vad.setProbabilityThreshold(Math.min(0.95, vadProbThreshold * 1.1))
     // Keep VAD running for barge-in detection
     this.vad.start()
     try {
@@ -372,6 +413,7 @@ export class VoiceOrchestrator {
     } finally {
       this.vad.stop()
       this.vad.setThreshold(vadThreshold)
+      this.vad.setProbabilityThreshold(vadProbThreshold)
       // Only enter follow-up listening if we are still in speaking state
       if (this.state === 'speaking') {
         if (this.conversation) {
@@ -427,10 +469,14 @@ export class VoiceOrchestrator {
     return this.tts.usingPiper
   }
 
+  notifyTtsPlaybackDone(id: string): void {
+    this.tts.notifyPlaybackDone(id)
+  }
+
   listSttModels(): Array<{ id: string; name: string; sizeBytes: number; installed: boolean }> {
     const resourcesDir = app.isPackaged
       ? join(process.resourcesPath, 'whisper')
-      : join(app.getAppPath(), '../../resources/whisper')
+      : join(app.getAppPath(), 'resources/whisper')
 
     return [
       {
@@ -476,7 +522,7 @@ export class VoiceOrchestrator {
       const modelId = this.deps.settingsRepo.get('voice.sttModel', z.string()) ?? 'base.en'
       const resourcesDir = app.isPackaged
         ? join(process.resourcesPath, 'whisper')
-        : join(app.getAppPath(), '../../resources/whisper')
+        : join(app.getAppPath(), 'resources/whisper')
       const modelPath = join(resourcesDir, `ggml-${modelId}-q5_1.bin`)
       this.whisper.setModelPath(modelPath)
 
@@ -555,6 +601,7 @@ export class VoiceOrchestrator {
     wakeWordSensitivity?: 'low' | 'medium' | 'high'
     vadEnabled?: boolean
     vadThreshold?: number
+    vadProbabilityThreshold?: number
     ttsLengthScale?: number
     followUpEnabled?: boolean
     followUpTimeoutMs?: number
@@ -608,6 +655,10 @@ export class VoiceOrchestrator {
     if (opts.vadThreshold !== undefined) {
       this.deps.settingsRepo.set('voice.vadThreshold', opts.vadThreshold)
       this.vad.setThreshold(opts.vadThreshold)
+    }
+    if (opts.vadProbabilityThreshold !== undefined) {
+      this.deps.settingsRepo.set('voice.vadProbabilityThreshold', opts.vadProbabilityThreshold)
+      this.vad.setProbabilityThreshold(opts.vadProbabilityThreshold)
     }
     if (opts.ttsLengthScale !== undefined) {
       this.deps.settingsRepo.set('voice.ttsLengthScale', opts.ttsLengthScale)
@@ -707,6 +758,46 @@ export class VoiceOrchestrator {
     sessionId: string,
     conversationId: string | undefined,
   ): Promise<void> {
+    // ── Intent classification ─────────────────────────────────────────────────
+    // System commands (stop, mute, repeat, etc.) are handled locally at zero
+    // LLM cost. All other intents route to the assistant with a hint.
+    const systemResult = classifySystemCommand(text)
+    if (systemResult && systemResult.intent === 'SYSTEM_COMMAND') {
+      this.deps.broadcast('voice:command', { command: systemResult.command })
+      switch (systemResult.command) {
+        case 'END_CONVERSATION':
+          void this.handleExitPhrase()
+          return
+        case 'STOP_SPEAKING':
+        case 'CANCEL':
+          this.tts.cancel()
+          this.setState('idle')
+          return
+        case 'REPEAT': {
+          // Re-speak the last assistant response if available — currently no-op,
+          // falls through to assistant so it can handle "repeat that" contextually.
+          break
+        }
+        default:
+          // MUTE, NEXT, SKIP, VOLUME_UP, VOLUME_DOWN — broadcast only (renderer handles)
+          return
+      }
+    }
+
+    // Classify non-system intent for routing hints (2s timeout, falls back to ASSISTANT_CHAT)
+    let voiceIntent: VoiceIntent = 'ASSISTANT_CHAT'
+    if (this.deps.chatClient && this.deps.classifierModel) {
+      const intentResult = await classifyVoiceIntent(
+        text,
+        this.deps.chatClient,
+        this.deps.classifierModel,
+      )
+      if (intentResult.intent !== 'SYSTEM_COMMAND') {
+        voiceIntent = intentResult.intent
+      }
+    }
+
+    // ── LLM routing ───────────────────────────────────────────────────────────
     const streamingTts = this.deps.settingsRepo.get('voice.streamingTts', z.boolean()) ?? true
     const voiceId =
       this.deps.settingsRepo.get('voice.ttsVoiceId', z.string().nullable()) ?? undefined
@@ -714,12 +805,27 @@ export class VoiceOrchestrator {
 
     // Always stream TTS when available — conversation mode only controls session persistence
     let ttsBuffer: StreamingTtsBuffer | null = null
-    const chunkPromises: Promise<void>[] = []
+    let synthQueue: TtsSynthesisQueue | null = null
 
     if (streamingTts && this.tts.available) {
-      ttsBuffer = new StreamingTtsBuffer((chunk) => {
-        chunkPromises.push(this.speakChunk(chunk, voiceId, lengthScale))
-      })
+      if (this.tts.usingPiper) {
+        // Use pre-synthesis queue for gapless playback via Piper
+        synthQueue = new TtsSynthesisQueue((text) => {
+          const result = this.tts.synthesizeAsync(text, voiceId, lengthScale)
+          // synthesizeAsync returns null only when not using Piper; guarded by usingPiper check
+          if (!result) throw new Error('synthesizeAsync returned null unexpectedly')
+          return result
+        })
+        const queue = synthQueue
+        ttsBuffer = new StreamingTtsBuffer((chunk) => {
+          if (this.state === 'thinking') this.setState('speaking')
+          queue.enqueue(chunk)
+        })
+      } else {
+        ttsBuffer = new StreamingTtsBuffer((chunk) => {
+          void this.speakChunk(chunk, voiceId, lengthScale)
+        })
+      }
     }
 
     // Guard against a hung Ollama call leaving the orchestrator in 'thinking' forever.
@@ -736,11 +842,13 @@ export class VoiceOrchestrator {
     })
 
     try {
+      const streamBuffer = ttsBuffer
       await Promise.race([
         this.deps.sendToAssistant(
           text,
           conversationId ?? sessionId,
-          ttsBuffer ? (token) => ttsBuffer.push(token) : undefined,
+          streamBuffer ? (token) => streamBuffer.push(token) : undefined,
+          voiceIntent,
         ),
         thinkingTimeout,
       ])
@@ -749,12 +857,13 @@ export class VoiceOrchestrator {
         ttsBuffer.flushFinal()
       }
 
-      // Wait for all TTS chunks to finish playing before transitioning state
-      if (chunkPromises.length > 0) {
-        await Promise.all(chunkPromises)
+      // Wait for all enqueued TTS to finish playing before transitioning state
+      if (synthQueue) {
+        await synthQueue.drain()
       }
     } catch (err) {
       ttsBuffer?.cancel()
+      synthQueue?.cancel()
       const message = err instanceof Error ? err.message : 'Assistant error'
       this.deps.broadcast('voice:error', { message })
     } finally {
@@ -786,6 +895,9 @@ export class VoiceOrchestrator {
       })
       const vadThreshold = this.deps.settingsRepo.get('voice.vadThreshold', z.number()) ?? 0.015
       this.vad.setThreshold(vadThreshold * 1.5)
+      const vadProbThreshold2 =
+        this.deps.settingsRepo.get('voice.vadProbabilityThreshold', z.number()) ?? 0.5
+      this.vad.setProbabilityThreshold(Math.min(0.95, vadProbThreshold2 * 1.1))
       this.vad.start()
     }
     try {
@@ -841,6 +953,7 @@ export class VoiceOrchestrator {
     this.tts.cancel()
     this.wakeWord.dispose()
     this.vad.stop()
+    this.sidecar.stop()
     this.vad.removeAllListeners()
     if (this.conversation) {
       clearSessionTimers(this.conversation)

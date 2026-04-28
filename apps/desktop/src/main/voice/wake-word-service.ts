@@ -1,11 +1,22 @@
 import { EventEmitter } from 'events'
 import { spawn } from 'child_process'
 import type { ChildProcess } from 'child_process'
+import { existsSync } from 'fs'
+import { join } from 'path'
+import { app } from 'electron'
+import type { SidecarManager } from './sidecar-manager'
 
-// Sensitivity maps to System.Speech confidence threshold (0–1 scale, lower = more sensitive)
-const SENSITIVITY_THRESHOLD: Record<'low' | 'medium' | 'high', number> = {
+// System.Speech confidence thresholds (0–1 scale, lower = more sensitive)
+const PS_SENSITIVITY_THRESHOLD: Record<'low' | 'medium' | 'high', number> = {
   high: 0.25,
   medium: 0.45,
+  low: 0.65,
+}
+
+// openWakeWord score thresholds (0–1, lower = more sensitive — inverse naming)
+const OWW_SENSITIVITY_THRESHOLD: Record<'low' | 'medium' | 'high', number> = {
+  high: 0.35,
+  medium: 0.5,
   low: 0.65,
 }
 
@@ -13,7 +24,7 @@ const SENSITIVITY_THRESHOLD: Record<'low' | 'medium' | 'high', number> = {
 // Prints "DETECTED" to stdout when the phrase is recognised above the confidence threshold.
 // Prints "READY" once the recognizer is armed.
 function buildPsScript(sensitivity: 'low' | 'medium' | 'high'): string {
-  const threshold = SENSITIVITY_THRESHOLD[sensitivity]
+  const threshold = PS_SENSITIVITY_THRESHOLD[sensitivity]
   return `
 Add-Type -AssemblyName System.Speech
 $rec = New-Object System.Speech.Recognition.SpeechRecognitionEngine
@@ -54,6 +65,15 @@ export class WakeWordService extends EventEmitter {
   private startAttempts = 0
   private readonly MAX_RESTARTS = 3
 
+  // Sidecar delegation
+  private sidecarManager: SidecarManager | null = null
+  private sidecarUnsub: (() => void) | null = null
+  private usingSidecar = false
+
+  setSidecarManager(manager: SidecarManager): void {
+    this.sidecarManager = manager
+  }
+
   enable(sensitivity: 'low' | 'medium' | 'high' = 'medium'): void {
     this.sensitivity = sensitivity
     if (this.enabled) return
@@ -81,6 +101,67 @@ export class WakeWordService extends EventEmitter {
   }
 
   private startDetector(): void {
+    // Prefer sidecar (openWakeWord) over PowerShell (System.Speech) when available
+    if (this.sidecarManager?.ready) {
+      this.startSidecarDetector()
+      return
+    }
+    this.startPsDetector()
+  }
+
+  private startSidecarDetector(): void {
+    const sidecar = this.sidecarManager
+    if (!sidecar) {
+      this.startPsDetector()
+      return
+    }
+    this.usingSidecar = true
+
+    const modelPath = this.resolveWakeModelPath()
+    const threshold = OWW_SENSITIVITY_THRESHOLD[this.sensitivity]
+
+    const cmd: Record<string, unknown> = {
+      module: 'wake',
+      cmd: 'load',
+      threshold,
+    }
+    if (modelPath) {
+      cmd['model_path'] = modelPath
+    } else {
+      cmd['model'] = 'hey_jarvis'
+    }
+
+    this.sidecarUnsub = sidecar.onModule('wake', (msg) => {
+      if (msg.type === 'ready') {
+        sidecar.sendCommand({ module: 'wake', cmd: 'start' })
+        this.emit('ready')
+      } else if (msg.type === 'detected') {
+        this.emit('detected')
+      } else if (msg.type === 'error') {
+        console.warn('[wake-word] Sidecar error:', msg['message'])
+        // Fall through to PowerShell on sidecar wake error
+        this.usingSidecar = false
+        this.sidecarUnsub?.()
+        this.sidecarUnsub = null
+        this.startPsDetector()
+      }
+    })
+
+    sidecar.sendCommand(cmd)
+  }
+
+  private resolveWakeModelPath(): string | null {
+    const dir = app.isPackaged
+      ? join(process.resourcesPath, 'models', 'wake')
+      : join(app.getAppPath(), 'resources/models/wake')
+    const candidate = join(dir, 'hey_auralith.onnx')
+    if (existsSync(candidate)) return candidate
+    const fallback = join(dir, 'hey_jarvis.onnx')
+    if (existsSync(fallback)) return fallback
+    return null
+  }
+
+  private startPsDetector(): void {
     if (process.platform !== 'win32') {
       console.warn(
         '[wake-word] System.Speech is Windows-only — wake word unavailable on this platform',
@@ -141,6 +222,13 @@ export class WakeWordService extends EventEmitter {
   }
 
   private stopDetector(): void {
+    if (this.usingSidecar) {
+      this.sidecarUnsub?.()
+      this.sidecarUnsub = null
+      this.sidecarManager?.sendCommand({ module: 'wake', cmd: 'stop' })
+      this.usingSidecar = false
+      return
+    }
     if (this.proc) {
       this.proc.removeAllListeners()
       this.proc.stdout?.removeAllListeners()

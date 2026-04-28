@@ -65,6 +65,7 @@ type VoiceDeps = {
     wakeWordSensitivity?: 'low' | 'medium' | 'high'
     vadEnabled?: boolean
     vadThreshold?: number
+    vadProbabilityThreshold?: number
     ttsLengthScale?: number
     followUpEnabled?: boolean
     followUpTimeoutMs?: number
@@ -72,6 +73,7 @@ type VoiceDeps = {
     exitPhrasesEnabled?: boolean
     streamingTts?: boolean
   }) => Promise<void>
+  notifyTtsPlaybackDone: (id: string) => void
   broadcast: (channel: string, data: unknown) => void
 }
 
@@ -179,6 +181,12 @@ export function registerVoiceHandlers(): void {
     return { ok: true }
   })
 
+  registerHandler('voice.ttsBufferEmpty', async (params) => {
+    const { id } = params as { id: string }
+    requireDeps().notifyTtsPlaybackDone(id)
+    return { ok: true }
+  })
+
   registerHandler('voice.setSettings', async (params) => {
     await requireDeps().setSettings(
       params as {
@@ -191,6 +199,7 @@ export function registerVoiceHandlers(): void {
         wakeWordSensitivity?: 'low' | 'medium' | 'high'
         vadEnabled?: boolean
         vadThreshold?: number
+        vadProbabilityThreshold?: number
         ttsLengthScale?: number
         followUpEnabled?: boolean
         followUpTimeoutMs?: number

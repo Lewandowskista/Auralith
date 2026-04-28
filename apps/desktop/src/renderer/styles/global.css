@@ -129,22 +129,38 @@ body,
   line-height: 1.65;
 }
 
-.prose-auralith p { margin: 0.6em 0; }
+.prose-auralith p { margin: 0.55em 0; }
 .prose-auralith p:first-child { margin-top: 0; }
-.prose-auralith p:last-child { margin-bottom: 0; }
+.prose-auralith p:last-child  { margin-bottom: 0; }
 
-.prose-auralith h1,
+.prose-auralith h1 {
+  font-size: 1.1em;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 1.2em 0 0.4em;
+  letter-spacing: -0.01em;
+}
 .prose-auralith h2 {
   font-size: 1em;
   font-weight: 600;
   color: var(--color-text-primary);
-  margin: 1.1em 0 0.35em;
+  margin: 1em 0 0.35em;
 }
 .prose-auralith h3 {
-  font-size: 0.92em;
+  font-size: 0.9em;
   font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   margin: 0.9em 0 0.3em;
 }
+.prose-auralith h4 {
+  font-size: 0.88em;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin: 0.8em 0 0.25em;
+}
+
 .prose-auralith ul,
 .prose-auralith ol {
   padding-left: 1.4em;
@@ -153,54 +169,105 @@ body,
 .prose-auralith li { margin: 0.2em 0; }
 
 .prose-auralith strong { color: var(--color-text-primary); font-weight: 600; }
-.prose-auralith em { color: var(--color-text-secondary); }
+.prose-auralith em    { color: var(--color-text-secondary); }
+.prose-auralith del   { opacity: 0.5; text-decoration: line-through; }
 
 .prose-auralith a {
   color: var(--color-accent-mid);
   text-decoration: none;
-  border-bottom: 1px solid rgba(167,139,250,0.3);
+  border-bottom: 1px solid rgba(167,139,250,0.35);
   transition: border-color 120ms;
 }
-.prose-auralith a:hover { border-color: rgba(167,139,250,0.7); }
+.prose-auralith a:hover { border-color: rgba(167,139,250,0.75); }
 
+/* Inline code */
 .prose-auralith code {
   background: rgba(139, 92, 246, 0.12);
   border: 1px solid rgba(139, 92, 246, 0.2);
   border-radius: 4px;
-  padding: 0.1em 0.4em;
-  font-size: 0.84em;
+  padding: 0.1em 0.42em;
+  font-size: 0.82em;
   font-family: var(--font-mono);
   color: var(--color-accent-high);
 }
 
+/* Code block */
 .prose-auralith pre {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--color-border-hairline);
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255,255,255,0.08);
   border-radius: 10px;
-  padding: 12px 14px;
+  padding: 0;
   overflow-x: auto;
-  font-size: 0.84em;
   margin: 0.75em 0;
 }
 .prose-auralith pre code {
   background: transparent;
   border: none;
-  padding: 0;
-  color: var(--color-text-secondary);
+  padding: 10px 14px;
+  display: block;
+  color: rgba(255,255,255,0.88);
+  font-size: 0.82em;
 }
 
+/* Blockquote */
 .prose-auralith blockquote {
   border-left: 2px solid var(--color-accent-mid);
-  padding-left: 0.75em;
-  color: var(--color-text-tertiary);
+  background: rgba(139,92,246,0.04);
+  border-radius: 0 6px 6px 0;
+  padding: 0.4em 0.75em;
+  color: var(--color-text-secondary);
   font-style: italic;
   margin: 0.75em 0;
 }
 
+/* Table */
+.prose-auralith table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92em;
+  margin: 0.75em 0;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.07);
+}
+.prose-auralith th {
+  padding: 7px 12px;
+  font-weight: 600;
+  font-size: 0.88em;
+  color: var(--color-text-secondary);
+  background: rgba(139,92,246,0.06);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  text-align: left;
+}
+.prose-auralith td {
+  padding: 6px 12px;
+  color: var(--color-text-primary);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.prose-auralith tr:last-child td { border-bottom: none; }
+.prose-auralith tr:nth-child(even) { background: rgba(255,255,255,0.02); }
+
+/* Horizontal rule */
 .prose-auralith hr {
   border: none;
   border-top: 1px solid var(--color-border-hairline);
   margin: 1em 0;
+}
+
+/* Images */
+.prose-auralith img {
+  max-width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--color-border-hairline);
+  display: block;
+  margin: 0.75em 0;
+}
+
+/* Task list checkboxes */
+.prose-auralith input[type="checkbox"] {
+  accent-color: var(--color-accent-mid);
+  margin-right: 0.4em;
+  cursor: default;
 }
 
 /* ── Article body — scoped for full HTML in reader panel ────────────────── */

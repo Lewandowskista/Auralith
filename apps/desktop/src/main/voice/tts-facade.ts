@@ -71,6 +71,21 @@ export class TtsFacade extends EventEmitter {
     return this.sapi.listVoices()
   }
 
+  synthesizeAsync(
+    text: string,
+    voiceId?: string,
+    lengthScale?: number,
+  ): { id: string; pcmDone: Promise<void>; playbackDone: Promise<void> } | null {
+    if (this.usePiper && this.piper.available) {
+      return this.piper.synthesizeAsync(text, voiceId, lengthScale)
+    }
+    return null
+  }
+
+  notifyPlaybackDone(id: string): void {
+    this.piper.notifyPlaybackDone(id)
+  }
+
   /** Prewarm Piper with the given voice so the first utterance has no cold-start. */
   async prewarm(voiceId: string): Promise<void> {
     if (this.piper.available) {

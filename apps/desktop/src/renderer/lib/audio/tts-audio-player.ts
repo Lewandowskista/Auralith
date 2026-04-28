@@ -14,6 +14,7 @@ let currentSampleRate = 22050
 let initialized = false
 let pcmCleanup: (() => void) | null = null
 let cancelCleanup: (() => void) | null = null
+let bufferEmptyCleanup: (() => void) | null = null
 
 /** Base64-encoded PCM-16 chunk + synthesis id + sample rate */
 type PcmMessage = { id: string; chunk: string; sampleRate: number }
@@ -67,6 +68,13 @@ async function ensureContext(sampleRate: number): Promise<void> {
       outputChannelCount: [1],
     })
 
+    // Forward buffer-empty events (with synthesis id) to main so it can resolve playbackDone
+    workletNode.port.onmessage = (e: MessageEvent<{ type: string; id?: string }>) => {
+      if (e.data.type === 'buffer-empty') {
+        void window.auralith.invoke('voice.ttsBufferEmpty', { id: e.data.id ?? '' })
+      }
+    }
+
     workletNode.connect(ctx.destination)
   }
 
@@ -92,12 +100,12 @@ function flush(): void {
   workletNode?.port.postMessage({ type: 'flush' })
 }
 
-function writePcm(pcmBuffer: ArrayBuffer, voiceSampleRate: number): void {
+function writePcm(pcmBuffer: ArrayBuffer, voiceSampleRate: number, synthId?: string): void {
   if (!workletNode || !ctx) return
 
   // Resample to the AudioContext's native rate if they differ
   const resampled = resamplePcm16(pcmBuffer, voiceSampleRate, ctx.sampleRate)
-  workletNode.port.postMessage({ type: 'pcm', chunk: resampled }, [resampled])
+  workletNode.port.postMessage({ type: 'pcm', id: synthId, chunk: resampled }, [resampled])
 }
 
 export async function initTtsAudioPlayer(): Promise<void> {
@@ -111,7 +119,7 @@ export async function initTtsAudioPlayer(): Promise<void> {
       try {
         await ensureContext(payload.sampleRate)
         const buf = base64ToArrayBuffer(payload.chunk)
-        writePcm(buf, payload.sampleRate)
+        writePcm(buf, payload.sampleRate, payload.id)
       } catch (err) {
         console.error('[tts-audio-player] pcm error', err)
       }
@@ -132,6 +140,7 @@ export async function initTtsAudioPlayer(): Promise<void> {
 export function disposeTtsAudioPlayer(): void {
   pcmCleanup?.()
   cancelCleanup?.()
+  bufferEmptyCleanup?.()
   void cleanup()
   initialized = false
 }

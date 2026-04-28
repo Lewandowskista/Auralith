@@ -415,14 +415,16 @@ app.whenReady().then(() => {
   const voiceOrchestrator = new VoiceOrchestrator({
     settingsRepo: settings,
     sqlite,
-    sendToAssistant: async (text, conversationId, onSpeakChunk) => {
+    sendToAssistant: async (text, conversationId, onSpeakChunk, voiceIntent) => {
       const win = BrowserWindow.getAllWindows()[0] ?? null
-      return sendVoiceMessage(text, win, conversationId, onSpeakChunk)
+      return sendVoiceMessage(text, win, conversationId, onSpeakChunk, voiceIntent)
     },
     broadcast: (channel, data) => {
       const win = BrowserWindow.getAllWindows()[0]
       win?.webContents.send(channel, data)
     },
+    chatClient: ollamaClient,
+    classifierModel: resolvedClassifierModel,
   })
 
   registerAssistantSpeakTool((text, voiceId) => voiceOrchestrator.speak(text, voiceId))
@@ -480,6 +482,7 @@ app.whenReady().then(() => {
     setSettings: async (opts) => {
       voiceOrchestrator.setSettings(opts)
     },
+    notifyTtsPlaybackDone: (id) => voiceOrchestrator.notifyTtsPlaybackDone(id),
     broadcast: broadcastFn,
   })
 

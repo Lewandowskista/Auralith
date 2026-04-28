@@ -20,16 +20,16 @@
   "dependencies": {
     "@auralith/core-ai": "workspace:*",
     "@auralith/core-db": "workspace:*",
-    "@auralith/core-voice": "workspace:*",
-    "@auralith/core-routines": "workspace:*",
     "@auralith/core-domain": "workspace:*",
     "@auralith/core-events": "workspace:*",
     "@auralith/core-ingest": "workspace:*",
     "@auralith/core-news": "workspace:*",
     "@auralith/core-retrieval": "workspace:*",
+    "@auralith/core-routines": "workspace:*",
     "@auralith/core-scheduler": "workspace:*",
     "@auralith/core-suggest": "workspace:*",
     "@auralith/core-tools": "workspace:*",
+    "@auralith/core-voice": "workspace:*",
     "@auralith/core-weather": "workspace:*",
     "@radix-ui/react-avatar": "^1.1.11",
     "@radix-ui/react-checkbox": "^1.3.3",
@@ -46,7 +46,6 @@
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-tooltip": "^1.2.8",
     "better-sqlite3": "^12.9.0",
-    "sqlite-vec": "^0.1.9",
     "chokidar": "^5.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -55,7 +54,9 @@
     "electron-updater": "^6.3.0",
     "framer-motion": "^11.18.2",
     "lucide-react": "^1.8.0",
+    "onnxruntime-node": "^1.24.3",
     "sonner": "^2.0.7",
+    "sqlite-vec": "^0.1.9",
     "tailwind-merge": "^3.5.0",
     "vaul": "^1.1.2"
   },
@@ -100,6 +101,27 @@
       {
         "from": "resources/piper",
         "to": "piper",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/vad",
+        "to": "vad",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/sidecar",
+        "to": "sidecar",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/models",
+        "to": "models",
         "filter": [
           "**/*"
         ]
